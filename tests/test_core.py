@@ -202,6 +202,43 @@ class AffinityTest(unittest.TestCase):
         self.assertGreater(first.affinity, 0)
         self.assertEqual(second.affinity, 0.0)
 
+    def test_non_whitelist_stays_in_friend_band(self) -> None:
+        calc = AffinityCalculator(
+            AffinityConfig(message_cooldown_seconds=0.0, non_whitelist_ceiling=68.0)
+        )
+        state = UserRelationState(affinity_score=68.0)
+        delta = calc.compute(_event(user_id="ordinary"), state)
+        self.assertEqual(delta.affinity, 0.0)
+
+    def test_whitelist_requires_trust_and_familiarity(self) -> None:
+        calc = AffinityCalculator(
+            AffinityConfig(
+                message_cooldown_seconds=0.0,
+                whitelist_user_ids=("trusted",),
+                whitelist_trust_gate=65.0,
+                whitelist_familiarity_gate=25.0,
+            )
+        )
+        immature = UserRelationState(trust_score=60.0, familiarity_score=10.0)
+        ready = UserRelationState(trust_score=70.0, familiarity_score=30.0)
+        self.assertLessEqual(
+            calc.compute(_event(user_id="trusted"), immature).affinity, 0.1
+        )
+        self.assertGreater(calc.compute(_event(user_id="trusted"), ready).affinity, 0.1)
+
+    def test_high_affinity_cannot_be_message_farmed(self) -> None:
+        calc = AffinityCalculator(
+            AffinityConfig(
+                message_cooldown_seconds=0.0,
+                whitelist_user_ids=("trusted",),
+                high_affinity_threshold=75.0,
+            )
+        )
+        state = UserRelationState(
+            affinity_score=80.0, trust_score=80.0, familiarity_score=80.0
+        )
+        self.assertEqual(calc.compute(_event(user_id="trusted"), state).affinity, 0.0)
+
 
 class FamiliarityTest(unittest.TestCase):
     def test_monotonic_and_diminishing(self) -> None:

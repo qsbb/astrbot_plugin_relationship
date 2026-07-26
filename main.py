@@ -16,6 +16,11 @@ import pathlib
 import time
 from typing import Any, Mapping
 
+try:
+    from astrbot.api.web import json_response
+except ImportError:
+    json_response = None
+
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
@@ -40,7 +45,7 @@ from .core.repository import JsonRepository
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 @register(
@@ -77,7 +82,9 @@ class RelationshipPlugin(Star):
             logger=self.logger,
         )
         self._mood_enabled = mood_enabled(self._raw_config)
+        self._affinity_config = affinity_config(self._raw_config)
         self._apply_log_level()
+        self._register_pages_web_api()
         RelationshipPlugin._current_instance = self
         self.logger.info("[relationship] 凝心溯溪-情 v%s 已加载", __version__)
 
@@ -124,6 +131,75 @@ class RelationshipPlugin(Star):
             )
 
         # 不修改 req，不接管内容生成；消费方可通过 manager 显式读取结构化建议。
+
+    # ------------------------------------------------------------------
+    # Plugin Page：关系总览与好感可视化
+    # ------------------------------------------------------------------
+
+    def _register_pages_web_api(self) -> bool:
+        register = getattr(self.context, "register_web_api", None)
+        if not callable(register):
+            return False
+        routes = (("overview", self._page_overview, ["GET"], "关系状态总览"),)
+        try:
+            for name, handler, methods, description in routes:
+                register(f"/{PLUGIN_NAME}/{name}", handler, methods, description)
+        except Exception as exc:
+            self.logger.debug("[relationship] page api unavailable: %s", exc)
+            return False
+        return True
+
+    @staticmethod
+    def _relation_band(score: float) -> str:
+        if score >= 75:
+            return "高好感 / 信任圈"
+        if score >= 60:
+            return "朋友"
+        if score >= 40:
+            return "普通熟人"
+        if score >= 25:
+            return "保持距离"
+        return "边界警戒"
+
+    async def _page_overview(self):
+        states = getattr(self.manager, "_states", {})
+        users = []
+        whitelist = set(self._affinity_config.whitelist_user_ids)
+        for key, state in states.items():
+            user_id = key.rsplit(":user:", 1)[-1]
+            users.append({
+                "user_id": user_id,
+                "affinity": round(state.affinity_score, 1),
+                "trust": round(state.trust_score, 1),
+                "familiarity": round(state.familiarity_score, 1),
+                "interaction_count": state.interaction_count,
+                "band": self._relation_band(state.affinity_score),
+                "whitelisted": user_id in whitelist,
+                "boundary": "开放" if state.affinity_score >= 60 and state.trust_score >= 65 else "谨慎",
+                "last_event_at": state.last_event_at,
+            })
+        users.sort(key=lambda item: (item["affinity"], item["trust"]), reverse=True)
+        bands = {name: sum(item["band"] == name for item in users) for name in ("高好感 / 信任圈", "朋友", "普通熟人", "保持距离", "边界警戒")}
+        payload = {
+            "success": True,
+            "plugin": {"id": PLUGIN_NAME, "version": __version__},
+            "policy": {
+                "high_affinity_threshold": self._affinity_config.high_affinity_threshold,
+                "non_whitelist_ceiling": self._affinity_config.non_whitelist_ceiling,
+                "trust_gate": self._affinity_config.whitelist_trust_gate,
+                "familiarity_gate": self._affinity_config.whitelist_familiarity_gate,
+                "whitelist_count": len(whitelist),
+            },
+            "summary": {
+                "user_count": len(users),
+                "high_affinity_count": bands["高好感 / 信任圈"],
+                "friend_count": bands["朋友"],
+                "cautious_count": sum(bands[name] for name in ("保持距离", "边界警戒")),
+                "bands": bands,
+            },
+            "users": users,
+        }
+        return json_response(payload) if json_response else payload
 
     # ------------------------------------------------------------------
     # /rel 命令

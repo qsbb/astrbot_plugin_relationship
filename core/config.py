@@ -85,6 +85,13 @@ def mood_kwargs(raw: Mapping[str, Any]) -> dict[str, int]:
     }
 
 
+def _get_ids(raw: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    value = _get(raw, key)
+    if isinstance(value, (list, tuple)):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    return tuple(item.strip() for item in str(value or "").split(",") if item.strip())
+
+
 def affinity_config(raw: Mapping[str, Any]) -> AffinityConfig:
     return AffinityConfig(
         message_gain=_get_float(raw, "AFFINITY_MESSAGE_GAIN"),
@@ -94,6 +101,11 @@ def affinity_config(raw: Mapping[str, Any]) -> AffinityConfig:
         daily_cap=_get_float(raw, "AFFINITY_DAILY_CAP"),
         daily_negative_cap=_get_float(raw, "AFFINITY_DAILY_NEGATIVE_CAP"),
         message_cooldown_seconds=_get_float(raw, "AFFINITY_MESSAGE_COOLDOWN_SECONDS"),
+        whitelist_user_ids=_get_ids(raw, "AFFINITY_WHITELIST_USER_IDS"),
+        high_affinity_threshold=_get_float(raw, "AFFINITY_HIGH_THRESHOLD"),
+        non_whitelist_ceiling=_get_float(raw, "AFFINITY_NON_WHITELIST_CEILING"),
+        whitelist_trust_gate=_get_float(raw, "AFFINITY_WHITELIST_TRUST_GATE"),
+        whitelist_familiarity_gate=_get_float(raw, "AFFINITY_WHITELIST_FAMILIARITY_GATE"),
     )
 
 

@@ -26,6 +26,11 @@ class AffinityConfig:
     daily_cap: float = 5.0  # 每日好感正向变化额度（兼容字段名）
     daily_negative_cap: float = 5.0  # 每日好感负向变化额度（绝对值）
     message_cooldown_seconds: float = 60.0
+    whitelist_user_ids: tuple[str, ...] = ()
+    high_affinity_threshold: float = 75.0
+    non_whitelist_ceiling: float = 68.0
+    whitelist_trust_gate: float = 65.0
+    whitelist_familiarity_gate: float = 25.0
 
 
 _EVENT_GAIN_KEYS = {
@@ -66,4 +71,26 @@ class AffinityCalculator:
             event.timestamp - state.last_event_at < cfg.message_cooldown_seconds
         ):
             return DimensionDelta(reason="普通消息处于加成冷却期")
-        return DimensionDelta(affinity=cfg.message_gain, reason="正常互动")
+
+        # 好感不是“聊得越多越高”的积分。非白名单用户保留在朋友区间，
+        # 只有白名单且信任、熟悉度都达标，才允许跨入高好感区。
+        is_whitelisted = event.user_id in cfg.whitelist_user_ids
+        if not is_whitelisted:
+            remaining = max(0.0, cfg.non_whitelist_ceiling - state.affinity_score)
+            if remaining <= 0:
+                return DimensionDelta(reason="非白名单关系已达到朋友区上限")
+            return DimensionDelta(
+                affinity=min(cfg.message_gain, remaining),
+                reason="非白名单用户仅在朋友区间缓慢累积",
+            )
+
+        trust_ready = state.trust_score >= cfg.whitelist_trust_gate
+        familiarity_ready = state.familiarity_score >= cfg.whitelist_familiarity_gate
+        if state.affinity_score >= cfg.high_affinity_threshold:
+            return DimensionDelta(reason="已处于高好感区，普通互动不再刷分")
+        if not (trust_ready and familiarity_ready):
+            return DimensionDelta(
+                affinity=min(cfg.message_gain, 0.1),
+                reason="白名单仍需通过信任与熟悉度门槛",
+            )
+        return DimensionDelta(affinity=cfg.message_gain, reason="白名单关系稳定累积")

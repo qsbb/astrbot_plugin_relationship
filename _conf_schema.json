@@ -84,6 +84,31 @@
     "description": "普通消息好感加成的最小间隔（秒）",
     "default": 60.0
   },
+  "AFFINITY_WHITELIST_USER_IDS": {
+    "type": "string",
+    "description": "高好感白名单用户 ID，多个 ID 用英文逗号分隔；留空表示没有高好感白名单",
+    "default": ""
+  },
+  "AFFINITY_HIGH_THRESHOLD": {
+    "type": "float",
+    "description": "高好感区起始分数（建议 75）",
+    "default": 75.0
+  },
+  "AFFINITY_NON_WHITELIST_CEILING": {
+    "type": "float",
+    "description": "非白名单用户的好感上限（建议 68，保持在朋友区）",
+    "default": 68.0
+  },
+  "AFFINITY_WHITELIST_TRUST_GATE": {
+    "type": "float",
+    "description": "白名单进入高好感区所需的信任门槛",
+    "default": 65.0
+  },
+  "AFFINITY_WHITELIST_FAMILIARITY_GATE": {
+    "type": "float",
+    "description": "白名单进入高好感区所需的熟悉度门槛",
+    "default": 25.0
+  },
   "TRUST_PROMISE_KEPT_GAIN": {
     "type": "float",
     "description": "承诺兑现的信任增量",
