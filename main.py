@@ -96,7 +96,7 @@ class RelationshipPlugin(Star):
     async def on_llm_request(
         self, event: AstrMessageEvent, req: Any, *args: Any, **kwargs: Any
     ) -> None:
-        """记录本轮互动，并把关系表达建议注入请求。"""
+        """记录本轮互动并更新关系状态；不修改请求、不注入任何建议。"""
         del args, kwargs
         plugin = RelationshipPlugin._current_instance or self
         if not isinstance(plugin, RelationshipPlugin):
