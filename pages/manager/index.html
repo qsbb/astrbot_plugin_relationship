@@ -7,56 +7,81 @@
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
-  <div class="shell">
-    <header class="topbar hero">
-      <div class="topbar-inner">
-        <div class="hero-copy">
-          <p class="eyebrow">AstrBot Plugin Page</p>
-          <h1>凝心溯溪-情</h1>
-          <p class="subtitle">关系分层、好感分布、信任门槛与边界状态可视化</p>
-        </div>
-        <div class="actions"><button id="btn-refresh" type="button">刷新</button></div>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">AstrBot Plugin Page</p>
+        <h1>凝心溯溪-情</h1>
+        <p>关系分层、好感分布、信任门槛与边界状态可视化</p>
+      </div>
+      <div class="toolbar">
+        <button id="btn-refresh" type="button">刷新</button>
       </div>
     </header>
 
-    <main>
-      <section class="policy-card">
-        <div><span>高好感门槛</span><strong data-policy="high_affinity_threshold">—</strong></div>
-        <div><span>普通朋友上限</span><strong data-policy="non_whitelist_ceiling">—</strong></div>
-        <div><span>信任门槛</span><strong data-policy="trust_gate">—</strong></div>
-        <div><span>熟悉度门槛</span><strong data-policy="familiarity_gate">—</strong></div>
-        <div><span>白名单人数</span><strong data-policy="whitelist_count">—</strong></div>
-      </section>
+    <nav class="tabs" aria-label="关系页面分区">
+      <button class="active" type="button">关系总览</button>
+    </nav>
 
-      <section class="stats-grid">
-        <div class="stat-card"><div class="stat-label">关系总数</div><div class="stat-value" data-stat="user_count">—</div></div>
-        <div class="stat-card"><div class="stat-label">高好感 / 信任圈</div><div class="stat-value accent" data-stat="high_affinity_count">—</div></div>
-        <div class="stat-card"><div class="stat-label">朋友</div><div class="stat-value" data-stat="friend_count">—</div></div>
-        <div class="stat-card"><div class="stat-label">谨慎或警戒</div><div class="stat-value danger" data-stat="cautious_count">—</div></div>
-      </section>
+    <section class="panel active">
+      <div class="cards" aria-label="关系概览">
+        <article class="metric"><span>关系总数</span><strong data-stat="user_count">—</strong></article>
+        <article class="metric"><span>高好感 / 信任圈</span><strong class="accent" data-stat="high_affinity_count">—</strong></article>
+        <article class="metric"><span>朋友</span><strong data-stat="friend_count">—</strong></article>
+        <article class="metric"><span>谨慎或警戒</span><strong class="danger" data-stat="cautious_count">—</strong></article>
+      </div>
 
-      <section class="visual-grid">
-        <article class="panel">
-          <div class="panel-head"><h2>好感关系分布</h2><span>人数</span></div>
+      <article class="card">
+        <div class="section-heading">
+          <div>
+            <h2>关系策略</h2>
+            <p>高好感保持稀缺，普通互动默认止于朋友区，并保留必要边界。</p>
+          </div>
+          <span class="pill ok">只读规则</span>
+        </div>
+        <div class="policy-grid">
+          <div><span>高好感门槛</span><strong data-policy="high_affinity_threshold">—</strong></div>
+          <div><span>普通朋友上限</span><strong data-policy="non_whitelist_ceiling">—</strong></div>
+          <div><span>信任门槛</span><strong data-policy="trust_gate">—</strong></div>
+          <div><span>熟悉度门槛</span><strong data-policy="familiarity_gate">—</strong></div>
+          <div><span>白名单人数</span><strong data-policy="whitelist_count">—</strong></div>
+        </div>
+      </article>
+
+      <div class="visual-grid">
+        <article class="card chart-card">
+          <div class="section-heading">
+            <div><h2>好感关系分布</h2><p>按当前关系层级统计人数</p></div>
+            <span class="pill">人数</span>
+          </div>
           <div id="band-chart" class="band-chart"></div>
         </article>
-        <article class="panel legend-panel">
+        <article class="card logic-card">
           <h2>关系逻辑</h2>
-          <p>普通互动只会缓慢形成熟悉与朋友关系，不会自动转化为依赖型高好感。</p>
-          <p>高好感是稀缺状态：需要进入白名单，并同时通过信任与熟悉度门槛。</p>
-          <p>未满足条件时维持边界，不因聊天频率高而取消谨慎。</p>
+          <div class="logic-list">
+            <div><span class="series-key">1</span><p>普通互动只缓慢形成熟悉和朋友关系，不自动转化为依赖型高好感。</p></div>
+            <div><span class="series-key">2</span><p>进入高好感需要白名单，并同时满足信任与熟悉度门槛。</p></div>
+            <div><span class="series-key">3</span><p>条件不足时继续保持边界，不因聊天频率高而取消谨慎。</p></div>
+          </div>
         </article>
-      </section>
+      </div>
 
-      <section class="table-wrap">
-        <table>
-          <thead><tr><th>用户</th><th>关系层级</th><th>好感</th><th>信任</th><th>熟悉度</th><th>互动</th><th>白名单</th><th>边界</th><th>最后互动</th></tr></thead>
-          <tbody id="relation-tbody"><tr class="empty-row"><td colspan="9">加载中…</td></tr></tbody>
-        </table>
-      </section>
-    </main>
-  </div>
-  <div id="toast" class="toast hidden"></div>
-  <script src="./app.js"></script>
+      <article class="card table-card">
+        <div class="section-heading">
+          <div><h2>关系明细</h2><p>状态由事件规则计算，页面不提供直接改分入口。</p></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>用户</th><th>关系层级</th><th>好感</th><th>信任</th><th>熟悉度</th><th>互动</th><th>白名单</th><th>边界</th><th>最后互动</th></tr></thead>
+            <tbody id="relation-tbody"><tr class="empty-row"><td colspan="9">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <div id="toast" class="hidden" role="status" aria-live="polite"></div>
+  </main>
+  <script src="/api/plugin/page/bridge-sdk.js"></script>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>

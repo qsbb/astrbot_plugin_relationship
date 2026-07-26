@@ -45,7 +45,7 @@ from .core.repository import JsonRepository
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 
 @register(
