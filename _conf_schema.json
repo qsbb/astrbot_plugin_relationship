@@ -1,0 +1,148 @@
+{
+  "MOOD_ENABLED": {
+    "type": "bool",
+    "description": "启用短期情绪与回复意愿追踪",
+    "default": true
+  },
+  "MOOD_WINDOW_SECONDS": {
+    "type": "int",
+    "description": "情绪滑动窗口时长（秒），窗口外互动自然遗忘",
+    "default": 300
+  },
+  "MOOD_FREQUENT_AFTER": {
+    "type": "int",
+    "description": "窗口内互动超过该次数后开始产生疲劳感",
+    "default": 6
+  },
+  "MOOD_STREAK_AFTER": {
+    "type": "int",
+    "description": "连续对话超过该轮数后开始产生疲劳感",
+    "default": 8
+  },
+  "MOOD_STREAK_GAP_SECONDS": {
+    "type": "int",
+    "description": "两条消息间隔小于该秒数视为连续对话",
+    "default": 90
+  },
+  "MOOD_LAZY_SCORE": {
+    "type": "int",
+    "description": "回复意愿低于等于该分数进入 lazy 档（0-100）",
+    "default": 72
+  },
+  "MOOD_ANNOYED_SCORE": {
+    "type": "int",
+    "description": "回复意愿低于等于该分数进入 annoyed 档（0-100）",
+    "default": 45
+  },
+  "MOOD_SILENCE_SCORE": {
+    "type": "int",
+    "description": "回复意愿低于等于该分数时允许概率硬静默（0-100）",
+    "default": 25
+  },
+  "MOOD_SILENCE_CHANCE_PERCENT": {
+    "type": "int",
+    "description": "硬静默触发概率（百分比，0 表示从不硬静默）",
+    "default": 45
+  },
+  "MOOD_MAX_CONSECUTIVE_SILENCES": {
+    "type": "int",
+    "description": "连续硬静默上限，0 表示不限制",
+    "default": 2
+  },
+  "AFFINITY_MESSAGE_GAIN": {
+    "type": "float",
+    "description": "普通有效消息的好感微增量",
+    "default": 0.2
+  },
+  "AFFINITY_PRAISE_GAIN": {
+    "type": "float",
+    "description": "被夸奖/正向互动的好感增量",
+    "default": 1.5
+  },
+  "AFFINITY_HELP_RECEIVED_GAIN": {
+    "type": "float",
+    "description": "得到用户帮助（纠错、补充信息等）的好感增量",
+    "default": 2.0
+  },
+  "AFFINITY_OFFENSE_PENALTY": {
+    "type": "float",
+    "description": "被冒犯时的好感减量（负数）",
+    "default": -2.0
+  },
+  "AFFINITY_DAILY_CAP": {
+    "type": "float",
+    "description": "每日好感正向变化额度，与负向额度独立，防止刷分",
+    "default": 5.0
+  },
+  "AFFINITY_DAILY_NEGATIVE_CAP": {
+    "type": "float",
+    "description": "每日好感负向变化额度（绝对值），与正向额度独立",
+    "default": 5.0
+  },
+  "AFFINITY_MESSAGE_COOLDOWN_SECONDS": {
+    "type": "float",
+    "description": "普通消息好感加成的最小间隔（秒）",
+    "default": 60.0
+  },
+  "TRUST_PROMISE_KEPT_GAIN": {
+    "type": "float",
+    "description": "承诺兑现的信任增量",
+    "default": 3.0
+  },
+  "TRUST_PROMISE_BROKEN_PENALTY": {
+    "type": "float",
+    "description": "承诺被打破/欺骗的信任减量（负数）",
+    "default": -5.0
+  },
+  "TRUST_OFFENSE_PENALTY": {
+    "type": "float",
+    "description": "冒犯对信任的轻微减量（负数）",
+    "default": -1.0
+  },
+  "FAMILIARITY_BASE_GAIN": {
+    "type": "float",
+    "description": "熟悉度为 0 时单次有效互动的增量",
+    "default": 0.8
+  },
+  "FAMILIARITY_DIMINISH_CURVE": {
+    "type": "float",
+    "description": "熟悉度递减曲线指数，越大后期增长越慢",
+    "default": 2.0
+  },
+  "FAMILIARITY_COOLDOWN_SECONDS": {
+    "type": "float",
+    "description": "熟悉度有效互动最小间隔（秒）",
+    "default": 120.0
+  },
+  "DECAY_AFFINITY_REGRESSION_PER_DAY": {
+    "type": "float",
+    "description": "好感每天向中位数回归的比例（0-1）",
+    "default": 0.02
+  },
+  "DECAY_TRUST_REGRESSION_PER_DAY": {
+    "type": "float",
+    "description": "信任每天向中位数回归的比例（0-1）",
+    "default": 0.005
+  },
+  "POLICY_ENABLE_PROMPT_FRAGMENT": {
+    "type": "bool",
+    "description": "是否在只读快照中生成兼容提示片段（插件入口不会自动注入）",
+    "default": true
+  },
+  "POLICY_ENABLE_STYLE_HINT": {
+    "type": "bool",
+    "description": "是否生成 response_style 语气/长度建议",
+    "default": true
+  },
+  "SAVE_INTERVAL_SECONDS": {
+    "type": "float",
+    "description": "长期状态持久化节流间隔（秒），0 表示每次事件都落盘",
+    "default": 30.0
+  },
+  "LOG_LEVEL": {
+    "type": "string",
+    "description": "插件日志级别",
+    "default": "INFO",
+    "options": ["DEBUG", "INFO"]
+  }
+}
