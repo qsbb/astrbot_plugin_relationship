@@ -49,7 +49,7 @@ class FamiliarityCalculator:
             return DimensionDelta(reason="有效互动冷却期内")
 
         ratio = max(0.0, 1.0 - state.familiarity_score / float(SCORE_MAX))
-        gain = cfg.base_gain * (ratio ** cfg.diminish_curve)
+        gain = cfg.base_gain * (ratio**cfg.diminish_curve)
         if gain <= 0.0:
             return DimensionDelta(reason="熟悉度已达上限")
         return DimensionDelta(familiarity=gain, reason="有效互动累积")

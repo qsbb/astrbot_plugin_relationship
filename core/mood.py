@@ -168,7 +168,10 @@ class MoodTracker:
         state = self._states[scope_key]
         self._prune(state, current)
 
-        if state.last_interaction_at and current - state.last_interaction_at <= self._streak_gap:
+        if (
+            state.last_interaction_at
+            and current - state.last_interaction_at <= self._streak_gap
+        ):
             state.streak_count += 1
         else:
             state.streak_count = 1

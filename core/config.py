@@ -6,6 +6,7 @@ schema 缺字段或用户误删配置时插件仍可运行。
 
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping
 
 from .affinity import AffinityConfig
@@ -32,6 +33,11 @@ DEFAULTS: dict[str, Any] = {
     "AFFINITY_DAILY_CAP": 5.0,
     "AFFINITY_DAILY_NEGATIVE_CAP": 5.0,
     "AFFINITY_MESSAGE_COOLDOWN_SECONDS": 60.0,
+    "AFFINITY_WHITELIST_USER_IDS": "",
+    "AFFINITY_HIGH_THRESHOLD": 75.0,
+    "AFFINITY_NON_WHITELIST_CEILING": 68.0,
+    "AFFINITY_WHITELIST_TRUST_GATE": 65.0,
+    "AFFINITY_WHITELIST_FAMILIARITY_GATE": 25.0,
     "TRUST_PROMISE_KEPT_GAIN": 3.0,
     "TRUST_PROMISE_BROKEN_PENALTY": -5.0,
     "TRUST_OFFENSE_PENALTY": -1.0,
@@ -52,36 +58,78 @@ def _get(raw: Mapping[str, Any], key: str) -> Any:
     return DEFAULTS[key] if value is None else value
 
 
-def _get_float(raw: Mapping[str, Any], key: str) -> float:
+def _get_float(
+    raw: Mapping[str, Any],
+    key: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
     try:
-        return float(_get(raw, key))
+        value = float(_get(raw, key))
     except (TypeError, ValueError):
-        return float(DEFAULTS[key])
+        value = float(DEFAULTS[key])
+    if not math.isfinite(value):
+        value = float(DEFAULTS[key])
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
 
 
-def _get_int(raw: Mapping[str, Any], key: str) -> int:
+def _get_int(
+    raw: Mapping[str, Any],
+    key: str,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
     try:
-        return int(_get(raw, key))
-    except (TypeError, ValueError):
-        return int(DEFAULTS[key])
+        value = int(_get(raw, key))
+    except (TypeError, ValueError, OverflowError):
+        value = int(DEFAULTS[key])
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
 
 
 def _get_bool(raw: Mapping[str, Any], key: str) -> bool:
-    return bool(_get(raw, key))
+    value = _get(raw, key)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on", "是", "开启"}:
+            return True
+        if normalized in {"false", "0", "no", "off", "否", "关闭", ""}:
+            return False
+        return bool(DEFAULTS[key])
+    return bool(value)
 
 
 def mood_kwargs(raw: Mapping[str, Any]) -> dict[str, int]:
     """MoodTracker 构造/update_config 参数。"""
     return {
-        "window_seconds": _get_int(raw, "MOOD_WINDOW_SECONDS"),
-        "frequent_after": _get_int(raw, "MOOD_FREQUENT_AFTER"),
-        "streak_after": _get_int(raw, "MOOD_STREAK_AFTER"),
-        "streak_gap_seconds": _get_int(raw, "MOOD_STREAK_GAP_SECONDS"),
-        "lazy_score": _get_int(raw, "MOOD_LAZY_SCORE"),
-        "annoyed_score": _get_int(raw, "MOOD_ANNOYED_SCORE"),
-        "silence_score": _get_int(raw, "MOOD_SILENCE_SCORE"),
-        "silence_chance_percent": _get_int(raw, "MOOD_SILENCE_CHANCE_PERCENT"),
-        "max_consecutive_silences": _get_int(raw, "MOOD_MAX_CONSECUTIVE_SILENCES"),
+        "window_seconds": _get_int(
+            raw, "MOOD_WINDOW_SECONDS", minimum=10, maximum=86400
+        ),
+        "frequent_after": _get_int(
+            raw, "MOOD_FREQUENT_AFTER", minimum=1, maximum=100000
+        ),
+        "streak_after": _get_int(raw, "MOOD_STREAK_AFTER", minimum=1, maximum=100000),
+        "streak_gap_seconds": _get_int(
+            raw, "MOOD_STREAK_GAP_SECONDS", minimum=1, maximum=86400
+        ),
+        "lazy_score": _get_int(raw, "MOOD_LAZY_SCORE", minimum=0, maximum=100),
+        "annoyed_score": _get_int(raw, "MOOD_ANNOYED_SCORE", minimum=0, maximum=100),
+        "silence_score": _get_int(raw, "MOOD_SILENCE_SCORE", minimum=0, maximum=100),
+        "silence_chance_percent": _get_int(
+            raw, "MOOD_SILENCE_CHANCE_PERCENT", minimum=0, maximum=100
+        ),
+        "max_consecutive_silences": _get_int(
+            raw, "MOOD_MAX_CONSECUTIVE_SILENCES", minimum=0, maximum=100000
+        ),
     }
 
 
@@ -94,43 +142,76 @@ def _get_ids(raw: Mapping[str, Any], key: str) -> tuple[str, ...]:
 
 def affinity_config(raw: Mapping[str, Any]) -> AffinityConfig:
     return AffinityConfig(
-        message_gain=_get_float(raw, "AFFINITY_MESSAGE_GAIN"),
-        praise_gain=_get_float(raw, "AFFINITY_PRAISE_GAIN"),
-        help_received_gain=_get_float(raw, "AFFINITY_HELP_RECEIVED_GAIN"),
-        offense_penalty=_get_float(raw, "AFFINITY_OFFENSE_PENALTY"),
-        daily_cap=_get_float(raw, "AFFINITY_DAILY_CAP"),
-        daily_negative_cap=_get_float(raw, "AFFINITY_DAILY_NEGATIVE_CAP"),
-        message_cooldown_seconds=_get_float(raw, "AFFINITY_MESSAGE_COOLDOWN_SECONDS"),
+        message_gain=_get_float(
+            raw, "AFFINITY_MESSAGE_GAIN", minimum=0.0, maximum=100.0
+        ),
+        praise_gain=_get_float(raw, "AFFINITY_PRAISE_GAIN", minimum=0.0, maximum=100.0),
+        help_received_gain=_get_float(
+            raw, "AFFINITY_HELP_RECEIVED_GAIN", minimum=0.0, maximum=100.0
+        ),
+        offense_penalty=_get_float(
+            raw, "AFFINITY_OFFENSE_PENALTY", minimum=-100.0, maximum=0.0
+        ),
+        daily_cap=_get_float(raw, "AFFINITY_DAILY_CAP", minimum=0.0, maximum=100.0),
+        daily_negative_cap=_get_float(
+            raw, "AFFINITY_DAILY_NEGATIVE_CAP", minimum=0.0, maximum=100.0
+        ),
+        message_cooldown_seconds=_get_float(
+            raw, "AFFINITY_MESSAGE_COOLDOWN_SECONDS", minimum=0.0, maximum=86400.0
+        ),
         whitelist_user_ids=_get_ids(raw, "AFFINITY_WHITELIST_USER_IDS"),
-        high_affinity_threshold=_get_float(raw, "AFFINITY_HIGH_THRESHOLD"),
-        non_whitelist_ceiling=_get_float(raw, "AFFINITY_NON_WHITELIST_CEILING"),
-        whitelist_trust_gate=_get_float(raw, "AFFINITY_WHITELIST_TRUST_GATE"),
-        whitelist_familiarity_gate=_get_float(raw, "AFFINITY_WHITELIST_FAMILIARITY_GATE"),
+        high_affinity_threshold=_get_float(
+            raw, "AFFINITY_HIGH_THRESHOLD", minimum=0.0, maximum=100.0
+        ),
+        non_whitelist_ceiling=_get_float(
+            raw, "AFFINITY_NON_WHITELIST_CEILING", minimum=0.0, maximum=100.0
+        ),
+        whitelist_trust_gate=_get_float(
+            raw, "AFFINITY_WHITELIST_TRUST_GATE", minimum=0.0, maximum=100.0
+        ),
+        whitelist_familiarity_gate=_get_float(
+            raw, "AFFINITY_WHITELIST_FAMILIARITY_GATE", minimum=0.0, maximum=100.0
+        ),
     )
 
 
 def trust_config(raw: Mapping[str, Any]) -> TrustConfig:
     return TrustConfig(
-        promise_kept_gain=_get_float(raw, "TRUST_PROMISE_KEPT_GAIN"),
-        promise_broken_penalty=_get_float(raw, "TRUST_PROMISE_BROKEN_PENALTY"),
-        offense_penalty=_get_float(raw, "TRUST_OFFENSE_PENALTY"),
+        promise_kept_gain=_get_float(
+            raw, "TRUST_PROMISE_KEPT_GAIN", minimum=0.0, maximum=100.0
+        ),
+        promise_broken_penalty=_get_float(
+            raw, "TRUST_PROMISE_BROKEN_PENALTY", minimum=-100.0, maximum=0.0
+        ),
+        offense_penalty=_get_float(
+            raw, "TRUST_OFFENSE_PENALTY", minimum=-100.0, maximum=0.0
+        ),
     )
 
 
 def familiarity_config(raw: Mapping[str, Any]) -> FamiliarityConfig:
     return FamiliarityConfig(
-        base_gain=_get_float(raw, "FAMILIARITY_BASE_GAIN"),
-        diminish_curve=_get_float(raw, "FAMILIARITY_DIMINISH_CURVE"),
-        cooldown_seconds=_get_float(raw, "FAMILIARITY_COOLDOWN_SECONDS"),
+        base_gain=_get_float(raw, "FAMILIARITY_BASE_GAIN", minimum=0.0, maximum=100.0),
+        diminish_curve=_get_float(
+            raw, "FAMILIARITY_DIMINISH_CURVE", minimum=0.01, maximum=10.0
+        ),
+        cooldown_seconds=_get_float(
+            raw, "FAMILIARITY_COOLDOWN_SECONDS", minimum=0.0, maximum=86400.0
+        ),
     )
 
 
 def decay_config(raw: Mapping[str, Any]) -> DecayConfig:
     return DecayConfig(
         affinity_regression_per_day=_get_float(
-            raw, "DECAY_AFFINITY_REGRESSION_PER_DAY"
+            raw,
+            "DECAY_AFFINITY_REGRESSION_PER_DAY",
+            minimum=0.0,
+            maximum=1.0,
         ),
-        trust_regression_per_day=_get_float(raw, "DECAY_TRUST_REGRESSION_PER_DAY"),
+        trust_regression_per_day=_get_float(
+            raw, "DECAY_TRUST_REGRESSION_PER_DAY", minimum=0.0, maximum=1.0
+        ),
     )
 
 

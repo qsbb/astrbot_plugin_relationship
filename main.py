@@ -45,7 +45,7 @@ from .core.repository import JsonRepository
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.3.1"
+__version__ = "0.3.4"
 
 
 @register(
@@ -149,9 +149,8 @@ class RelationshipPlugin(Star):
             return False
         return True
 
-    @staticmethod
-    def _relation_band(score: float) -> str:
-        if score >= 75:
+    def _relation_band(self, score: float) -> str:
+        if score >= self._affinity_config.high_affinity_threshold:
             return "高好感 / 信任圈"
         if score >= 60:
             return "朋友"
@@ -167,19 +166,34 @@ class RelationshipPlugin(Star):
         whitelist = set(self._affinity_config.whitelist_user_ids)
         for key, state in states.items():
             user_id = key.rsplit(":user:", 1)[-1]
-            users.append({
-                "user_id": user_id,
-                "affinity": round(state.affinity_score, 1),
-                "trust": round(state.trust_score, 1),
-                "familiarity": round(state.familiarity_score, 1),
-                "interaction_count": state.interaction_count,
-                "band": self._relation_band(state.affinity_score),
-                "whitelisted": user_id in whitelist,
-                "boundary": "开放" if state.affinity_score >= 60 and state.trust_score >= 65 else "谨慎",
-                "last_event_at": state.last_event_at,
-            })
+            users.append(
+                {
+                    "user_id": user_id,
+                    "affinity": round(state.affinity_score, 1),
+                    "trust": round(state.trust_score, 1),
+                    "familiarity": round(state.familiarity_score, 1),
+                    "interaction_count": state.interaction_count,
+                    "band": self._relation_band(state.affinity_score),
+                    "whitelisted": user_id in whitelist,
+                    "boundary": "开放"
+                    if (
+                        user_id in whitelist
+                        and state.affinity_score
+                        >= self._affinity_config.high_affinity_threshold
+                        and state.trust_score
+                        >= self._affinity_config.whitelist_trust_gate
+                        and state.familiarity_score
+                        >= self._affinity_config.whitelist_familiarity_gate
+                    )
+                    else "谨慎",
+                    "last_event_at": state.last_event_at,
+                }
+            )
         users.sort(key=lambda item: (item["affinity"], item["trust"]), reverse=True)
-        bands = {name: sum(item["band"] == name for item in users) for name in ("高好感 / 信任圈", "朋友", "普通熟人", "保持距离", "边界警戒")}
+        bands = {
+            name: sum(item["band"] == name for item in users)
+            for name in ("高好感 / 信任圈", "朋友", "普通熟人", "保持距离", "边界警戒")
+        }
         payload = {
             "success": True,
             "plugin": {"id": PLUGIN_NAME, "version": __version__},
@@ -305,4 +319,3 @@ class RelationshipPlugin(Star):
         user_id = cls._safe_event_id(event, "get_sender_id")
         group_id = cls._safe_event_id(event, "get_group_id") or None
         return RelationshipScope(bot_id=bot_id, user_id=user_id, group_id=group_id)
-

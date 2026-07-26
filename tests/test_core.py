@@ -18,6 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import models  # noqa: E402
 from core.affinity import AffinityCalculator, AffinityConfig  # noqa: E402
+from core.config import (  # noqa: E402
+    affinity_config,
+    decay_config,
+    familiarity_config,
+    mood_kwargs,
+    trust_config,
+)
 from core.decay import DecayConfig, apply_decay  # noqa: E402
 from core.familiarity import FamiliarityCalculator, FamiliarityConfig  # noqa: E402
 from core.manager import RelationshipStateManager  # noqa: E402
@@ -175,8 +182,64 @@ class MoodRegressionTest(unittest.TestCase):
 
 
 # ----------------------------------------------------------------------
-# affinity / familiarity / trust
+# config / affinity / familiarity / trust
 # ----------------------------------------------------------------------
+
+
+class ConfigTest(unittest.TestCase):
+    def test_invalid_values_fall_back_or_are_bounded(self) -> None:
+        mood = mood_kwargs({"MOOD_WINDOW_SECONDS": "bad", "MOOD_LAZY_SCORE": 999})
+        self.assertEqual(mood["window_seconds"], 300)
+        self.assertEqual(mood["lazy_score"], 100)
+        cfg = affinity_config(
+            {
+                "AFFINITY_MESSAGE_GAIN": float("nan"),
+                "AFFINITY_OFFENSE_PENALTY": 5,
+                "AFFINITY_DAILY_CAP": -1,
+            }
+        )
+        self.assertEqual(cfg.message_gain, 0.2)
+        self.assertEqual(cfg.offense_penalty, 0.0)
+        self.assertEqual(cfg.daily_cap, 0.0)
+
+    def test_int_inf_nan_and_domain_configs_are_safe(self) -> None:
+        self.assertEqual(
+            mood_kwargs({"MOOD_WINDOW_SECONDS": float("inf")})["window_seconds"], 300
+        )
+        self.assertEqual(
+            mood_kwargs({"MOOD_WINDOW_SECONDS": float("nan")})["window_seconds"], 300
+        )
+
+        trust = trust_config(
+            {
+                "TRUST_PROMISE_KEPT_GAIN": -3,
+                "TRUST_PROMISE_BROKEN_PENALTY": 5,
+                "TRUST_OFFENSE_PENALTY": -999,
+            }
+        )
+        self.assertEqual(trust.promise_kept_gain, 0.0)
+        self.assertEqual(trust.promise_broken_penalty, 0.0)
+        self.assertEqual(trust.offense_penalty, -100.0)
+
+        familiarity = familiarity_config(
+            {
+                "FAMILIARITY_BASE_GAIN": -1,
+                "FAMILIARITY_DIMINISH_CURVE": 0,
+                "FAMILIARITY_COOLDOWN_SECONDS": 10**9,
+            }
+        )
+        self.assertEqual(familiarity.base_gain, 0.0)
+        self.assertEqual(familiarity.diminish_curve, 0.01)
+        self.assertEqual(familiarity.cooldown_seconds, 86400.0)
+
+        decay = decay_config(
+            {
+                "DECAY_AFFINITY_REGRESSION_PER_DAY": -1,
+                "DECAY_TRUST_REGRESSION_PER_DAY": 2,
+            }
+        )
+        self.assertEqual(decay.affinity_regression_per_day, 0.0)
+        self.assertEqual(decay.trust_regression_per_day, 1.0)
 
 
 class AffinityTest(unittest.TestCase):
@@ -225,6 +288,23 @@ class AffinityTest(unittest.TestCase):
             calc.compute(_event(user_id="trusted"), immature).affinity, 0.1
         )
         self.assertGreater(calc.compute(_event(user_id="trusted"), ready).affinity, 0.1)
+
+    def test_positive_semantic_event_respects_ceiling_and_gates(self) -> None:
+        calc = AffinityCalculator(
+            AffinityConfig(praise_gain=10.0, non_whitelist_ceiling=68.0)
+        )
+        delta = calc.compute(
+            _event(kind=models.KIND_PRAISE), UserRelationState(affinity_score=67.0)
+        )
+        self.assertEqual(delta.affinity, 1.0)
+        gated = AffinityCalculator(
+            AffinityConfig(praise_gain=10.0, whitelist_user_ids=("trusted",))
+        )
+        delta = gated.compute(
+            _event(kind=models.KIND_PRAISE, user_id="trusted"),
+            UserRelationState(affinity_score=60.0),
+        )
+        self.assertEqual(delta.affinity, 0.1)
 
     def test_high_affinity_cannot_be_message_farmed(self) -> None:
         calc = AffinityCalculator(
@@ -336,6 +416,23 @@ class RepositoryTest(unittest.TestCase):
             loaded = JsonRepository(path).load_all()
             self.assertAlmostEqual(loaded["bot:user:u1"].affinity_score, 77.0)
 
+    def test_future_schema_is_safe_empty_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rel.json"
+            path.write_text(
+                json.dumps(
+                    {"schema_version": 999, "users": {"bad": {"affinity_score": 99}}}
+                ),
+                encoding="utf-8",
+            )
+            repo = JsonRepository(path)
+            self.assertEqual(repo.load_all(), {})
+            with self.assertRaises(OSError):
+                repo.save_all({"bot:user:u1": UserRelationState()})
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8"))["schema_version"], 999
+            )
+
     def test_corrupted_file_returns_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rel.json"
@@ -367,16 +464,52 @@ class ManagerTest(unittest.TestCase):
 
     def test_daily_affinity_cap(self) -> None:
         mgr = self._manager(
-            affinity=AffinityCalculator(
-                AffinityConfig(praise_gain=2.0, daily_cap=5.0)
-            )
+            affinity=AffinityCalculator(AffinityConfig(praise_gain=2.0, daily_cap=5.0))
         )
         # 同一天内狂刷夸奖：好感最多 +5
         for i in range(10):
-            snap = _run(
-                mgr.record(_event(kind=models.KIND_PRAISE, ts=1000.0 + i * 10))
-            )
+            snap = _run(mgr.record(_event(kind=models.KIND_PRAISE, ts=1000.0 + i * 10)))
         self.assertEqual(snap.affinity, 55)
+
+    def test_future_timestamp_cannot_bypass_message_affinity_cooldown(self) -> None:
+        repo = MemoryRepository()
+        mgr = self._manager(
+            repository=repo,
+            affinity=AffinityCalculator(
+                AffinityConfig(message_gain=1.0, message_cooldown_seconds=60.0)
+            ),
+            familiarity=FamiliarityCalculator(FamiliarityConfig(base_gain=0.0)),
+        )
+        _run(mgr.record(_event(ts=1000.0, event_id="normal-1")))
+        _run(mgr.record(_event(ts=1000000.0, event_id="normal-future")))
+
+        state = mgr._states[RelationshipScope("bot", "u1", "g1").user_key]
+        self.assertEqual(state.affinity_score, 51.0)
+        self.assertEqual(state.last_event_at, 1000.0)
+        self.assertEqual(
+            [record.timestamp for record in repo.load_events()], [1000.0, 1000.0]
+        )
+
+    def test_future_timestamp_cannot_bypass_familiarity_cooldown(self) -> None:
+        repo = MemoryRepository()
+        mgr = self._manager(
+            repository=repo,
+            affinity=AffinityCalculator(
+                AffinityConfig(message_gain=0.0, message_cooldown_seconds=0.0)
+            ),
+            familiarity=FamiliarityCalculator(
+                FamiliarityConfig(base_gain=1.0, cooldown_seconds=120.0)
+            ),
+        )
+        _run(mgr.record(_event(ts=1000.0, event_id="familiarity-1")))
+        _run(mgr.record(_event(ts=1000000.0, event_id="familiarity-future")))
+
+        state = mgr._states[RelationshipScope("bot", "u1", "g1").user_key]
+        self.assertEqual(state.familiarity_score, 1.0)
+        self.assertEqual(state.last_event_at, 1000.0)
+        self.assertEqual(
+            [record.timestamp for record in repo.load_events()], [1000.0, 1000.0]
+        )
 
     def test_positive_and_negative_affinity_caps_are_independent(self) -> None:
         mgr = self._manager(
@@ -413,9 +546,8 @@ class ManagerTest(unittest.TestCase):
 
     def test_daily_cap_resets_next_day(self) -> None:
         mgr = self._manager(
-            affinity=AffinityCalculator(
-                AffinityConfig(praise_gain=2.0, daily_cap=5.0)
-            )
+            affinity=AffinityCalculator(AffinityConfig(praise_gain=2.0, daily_cap=5.0)),
+            clock=lambda: 1000.0 + 86400.0 * 2,
         )
         for i in range(10):
             _run(mgr.record(_event(kind=models.KIND_PRAISE, ts=1000.0 + i * 10)))
@@ -449,9 +581,7 @@ class ManagerTest(unittest.TestCase):
 
     def test_mood_does_not_touch_affinity(self) -> None:
         """维度隔离：狂轰滥炸把情绪打到 annoyed，好感不下降。"""
-        mgr = self._manager(
-            mood_tracker=MoodTracker(frequent_after=1, streak_after=1)
-        )
+        mgr = self._manager(mood_tracker=MoodTracker(frequent_after=1, streak_after=1))
         snap = None
         for i in range(20):
             snap = _run(mgr.record(_event(text="在吗在吗在吗", ts=1000.0 + i)))
@@ -459,9 +589,7 @@ class ManagerTest(unittest.TestCase):
         self.assertGreaterEqual(snap.affinity, 50)
 
     def test_command_not_counted(self) -> None:
-        mgr = self._manager(
-            mood_tracker=MoodTracker(frequent_after=1, streak_after=1)
-        )
+        mgr = self._manager(mood_tracker=MoodTracker(frequent_after=1, streak_after=1))
         for i in range(20):
             snap = _run(
                 mgr.record(
@@ -486,11 +614,7 @@ class ManagerTest(unittest.TestCase):
             path = Path(tmp) / "rel.json"
             mgr1 = self._manager(repository=JsonRepository(path))
             for i in range(3):
-                _run(
-                    mgr1.record(
-                        _event(kind=models.KIND_PRAISE, ts=1000.0 + i * 200)
-                    )
-                )
+                _run(mgr1.record(_event(kind=models.KIND_PRAISE, ts=1000.0 + i * 200)))
             mgr1._flush()
             # 模拟重启
             mgr2 = self._manager(repository=JsonRepository(path))
@@ -506,6 +630,16 @@ class ManagerTest(unittest.TestCase):
         s1 = _run(mgr.get_snapshot("bot", "u1", "g1"))
         s2 = _run(mgr.get_snapshot("bot", "u1", "g1"))
         self.assertEqual(s1.as_dict(), s2.as_dict())
+
+    def test_command_has_no_ledger_or_persistence_side_effect(self) -> None:
+        repo = MemoryRepository()
+        mgr = self._manager(repository=repo)
+        before = _run(mgr.get_snapshot("bot", "u1", "g1")).as_dict()
+        after = _run(
+            mgr.record(_event(text="/rel status", kind=models.KIND_COMMAND))
+        ).as_dict()
+        self.assertEqual(before, after)
+        self.assertEqual(repo.load_events(), [])
 
     def test_event_ledger_is_idempotent_and_omits_text(self) -> None:
         repo = MemoryRepository()
@@ -523,6 +657,83 @@ class ManagerTest(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertNotIn("text", records[0].as_dict())
         self.assertEqual(records[0].evidence_refs, ("workflow:42",))
+
+    def test_event_identity_is_namespaced_and_future_timestamp_is_clamped(self) -> None:
+        repo = MemoryRepository()
+        mgr = self._manager(repository=repo)
+        _run(mgr.record(_event(user_id="u1", event_id="same", ts=10**20)))
+        _run(mgr.record(_event(user_id="u2", event_id="same", ts=10**20)))
+        records = repo.load_events()
+        self.assertEqual(len(records), 2)
+        self.assertNotEqual(records[0].event_id, records[1].event_id)
+        self.assertEqual(records[0].timestamp, 1000.0)
+
+    def test_business_time_does_not_rewind_daily_cap_decay_or_last_event(self) -> None:
+        mgr = self._manager(
+            affinity=AffinityCalculator(
+                AffinityConfig(
+                    praise_gain=5.0, daily_cap=5.0, message_cooldown_seconds=0
+                )
+            ),
+            clock=lambda: 2000.0,
+        )
+        first = _run(
+            mgr.record(_event(kind=models.KIND_PRAISE, ts=2000.0, event_id="new"))
+        )
+        second = _run(
+            mgr.record(_event(kind=models.KIND_PRAISE, ts=1000.0, event_id="old"))
+        )
+        self.assertEqual(first.affinity, second.affinity)
+        state = mgr._states["bot:user:u1"]
+        self.assertEqual(state.last_event_at, 2000.0)
+        self.assertEqual(state.daily_anchor_day, "1970-01-01")
+        self.assertEqual(state.daily_affinity_positive_used, 5.0)
+
+    def test_v2_ledger_dedupe_is_compatible_after_v3_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rel.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "users": {},
+                        "events": [
+                            {
+                                "event_id": "legacy-event",
+                                "timestamp": 1000,
+                                "bot_id": "bot",
+                                "user_id": "u1",
+                                "group_id": "g1",
+                                "kind": "praise",
+                                "source": "direct",
+                                "confidence": 1,
+                                "severity": 1,
+                                "dedupe_key": "legacy-key",
+                                "evidence_refs": [],
+                                "applied": True,
+                                "rejection_reason": "",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            repo = JsonRepository(path)
+            mgr = self._manager(repository=repo)
+            _run(
+                mgr.record(
+                    _event(
+                        kind=models.KIND_PRAISE,
+                        event_id="legacy-event",
+                        dedupe_key="legacy-key",
+                    )
+                )
+            )
+            self.assertEqual(len(repo.load_events()), 1)
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8"))["schema_version"],
+                SCHEMA_VERSION,
+            )
 
     def test_untrusted_semantic_event_is_recorded_but_not_applied(self) -> None:
         repo = MemoryRepository()
@@ -567,7 +778,9 @@ class ManagerTest(unittest.TestCase):
         for i in range(8):
             _run(
                 mgr.record(
-                    _event(user_id="u1", text=f"m{i}", ts=1000.0 + i, event_id=f"u1-{i}")
+                    _event(
+                        user_id="u1", text=f"m{i}", ts=1000.0 + i, event_id=f"u1-{i}"
+                    )
                 )
             )
         other = _run(

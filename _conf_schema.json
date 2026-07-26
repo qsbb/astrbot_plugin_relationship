@@ -7,7 +7,9 @@
   "MOOD_WINDOW_SECONDS": {
     "type": "int",
     "description": "情绪滑动窗口时长（秒），窗口外互动自然遗忘",
-    "default": 300
+    "default": 300,
+    "minimum": 10,
+    "maximum": 86400
   },
   "MOOD_FREQUENT_AFTER": {
     "type": "int",
@@ -111,43 +113,59 @@
   },
   "TRUST_PROMISE_KEPT_GAIN": {
     "type": "float",
-    "description": "承诺兑现的信任增量",
-    "default": 3.0
+    "description": "承诺兑现的信任增量（非负，最大 100）",
+    "default": 3.0,
+    "minimum": 0.0,
+    "maximum": 100.0
   },
   "TRUST_PROMISE_BROKEN_PENALTY": {
     "type": "float",
     "description": "承诺被打破/欺骗的信任减量（负数）",
-    "default": -5.0
+    "default": -5.0,
+    "minimum": -100.0,
+    "maximum": 0.0
   },
   "TRUST_OFFENSE_PENALTY": {
     "type": "float",
     "description": "冒犯对信任的轻微减量（负数）",
-    "default": -1.0
+    "default": -1.0,
+    "minimum": -100.0,
+    "maximum": 0.0
   },
   "FAMILIARITY_BASE_GAIN": {
     "type": "float",
-    "description": "熟悉度为 0 时单次有效互动的增量",
-    "default": 0.8
+    "description": "熟悉度为 0 时单次有效互动的增量（0-100）",
+    "default": 0.8,
+    "minimum": 0.0,
+    "maximum": 100.0
   },
   "FAMILIARITY_DIMINISH_CURVE": {
     "type": "float",
-    "description": "熟悉度递减曲线指数，越大后期增长越慢",
-    "default": 2.0
+    "description": "熟悉度递减曲线指数，必须为正数",
+    "default": 2.0,
+    "minimum": 0.01,
+    "maximum": 10.0
   },
   "FAMILIARITY_COOLDOWN_SECONDS": {
     "type": "float",
-    "description": "熟悉度有效互动最小间隔（秒）",
-    "default": 120.0
+    "description": "熟悉度有效互动最小间隔（秒，0-86400）",
+    "default": 120.0,
+    "minimum": 0.0,
+    "maximum": 86400.0
   },
   "DECAY_AFFINITY_REGRESSION_PER_DAY": {
     "type": "float",
     "description": "好感每天向中位数回归的比例（0-1）",
-    "default": 0.02
+    "default": 0.02,
+    "minimum": 0.0,
+    "maximum": 1.0
   },
   "DECAY_TRUST_REGRESSION_PER_DAY": {
     "type": "float",
     "description": "信任每天向中位数回归的比例（0-1）",
-    "default": 0.005
+    "default": 0.005,
+    "minimum": 0.0,
+    "maximum": 1.0
   },
   "POLICY_ENABLE_PROMPT_FRAGMENT": {
     "type": "bool",

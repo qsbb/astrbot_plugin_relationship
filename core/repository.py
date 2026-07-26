@@ -1,6 +1,6 @@
 """关系状态与审计事件的 JSON 仓库。
 
-schema v2 在 v1 聚合快照基础上新增只追加审计事件。账本不保存消息正文；
+schema v3 在 v2 事件账本基础上统一事件身份命名空间，并兼容旧账本迁移。账本不保存消息正文；
 JSON 写入仍采用临时文件 + 原子替换。仓库只负责存取，不负责业务重放。
 """
 
@@ -14,7 +14,7 @@ from typing import Protocol
 
 from .models import RelationshipEventRecord, UserRelationState
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class RelationshipRepository(Protocol):
@@ -35,7 +35,10 @@ class MemoryRepository:
         self._events: list[RelationshipEventRecord] = []
 
     def load_all(self) -> dict[str, UserRelationState]:
-        return {key: UserRelationState.from_dict(value.as_dict()) for key, value in self._data.items()}
+        return {
+            key: UserRelationState.from_dict(value.as_dict())
+            for key, value in self._data.items()
+        }
 
     def load_events(self) -> list[RelationshipEventRecord]:
         return list(self._events)
@@ -46,7 +49,8 @@ class MemoryRepository:
         events: list[RelationshipEventRecord],
     ) -> None:
         self._data = {
-            key: UserRelationState.from_dict(value.as_dict()) for key, value in states.items()
+            key: UserRelationState.from_dict(value.as_dict())
+            for key, value in states.items()
         }
         self._events = list(events)
 
@@ -55,8 +59,17 @@ class MemoryRepository:
         self.save(states, self._events)
 
 
+def _empty_payload() -> dict[str, object]:
+    return {"schema_version": SCHEMA_VERSION, "users": {}, "events": []}
+
+
 def _migrate(payload: dict[str, object]) -> dict[str, object]:
-    version = int(payload.get("schema_version", 0))  # type: ignore[arg-type]
+    try:
+        version = int(payload.get("schema_version", 0))  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return _empty_payload()
+    if version < 0:
+        return _empty_payload()
     if version == 0:
         users = payload.get("users")
         if not isinstance(users, dict):
@@ -70,18 +83,42 @@ def _migrate(payload: dict[str, object]) -> dict[str, object]:
             "events": [],
         }
         version = 2
-    if version > SCHEMA_VERSION:
+    if version == 2:
+        raw_events = payload.get("events", [])
+        migrated_events: list[object] = []
+        if isinstance(raw_events, list):
+            for value in raw_events:
+                if not isinstance(value, dict):
+                    continue
+                event = dict(value)
+                namespace = (
+                    f"{event.get('bot_id', '')}\x1f{event.get('user_id', '')}\x1f"
+                    f"{event.get('group_id') or ''}\x1f"
+                )
+                raw_event_id = str(event.get("event_id", ""))
+                raw_dedupe = str(event.get("dedupe_key", ""))
+                if raw_event_id and not raw_event_id.startswith(namespace):
+                    event["event_id"] = namespace + raw_event_id
+                if raw_dedupe and not raw_dedupe.startswith(namespace):
+                    event["dedupe_key"] = namespace + raw_dedupe
+                elif not raw_dedupe and raw_event_id:
+                    event["dedupe_key"] = namespace + raw_event_id
+                migrated_events.append(event)
         payload = {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": 3,
             "users": payload.get("users", {}),
-            "events": payload.get("events", []),
+            "events": migrated_events,
         }
+        version = 3
+    if version > SCHEMA_VERSION:
+        payload = _empty_payload()
     return payload
 
 
 class JsonRepository:
     def __init__(self, file_path: str | Path) -> None:
         self._path = Path(file_path)
+        self._write_blocked = False
 
     @property
     def path(self) -> Path:
@@ -89,14 +126,27 @@ class JsonRepository:
 
     def _load_payload(self) -> dict[str, object]:
         if not self._path.exists():
-            return {"schema_version": SCHEMA_VERSION, "users": {}, "events": []}
+            return _empty_payload()
         try:
             payload = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return {"schema_version": SCHEMA_VERSION, "users": {}, "events": []}
+            self._write_blocked = False
+            return _empty_payload()
         if not isinstance(payload, dict):
-            return {"schema_version": SCHEMA_VERSION, "users": {}, "events": []}
-        return _migrate(payload)
+            self._write_blocked = False
+            return _empty_payload()
+        migrated = _migrate(payload)
+        try:
+            source_version = int(payload.get("schema_version", 0))  # type: ignore[arg-type]
+        except (TypeError, ValueError, OverflowError):
+            source_version = 0
+        self._write_blocked = source_version > SCHEMA_VERSION
+        if source_version < SCHEMA_VERSION and not self._write_blocked:
+            try:
+                self._atomic_write(migrated)
+            except OSError:
+                pass
+        return migrated
 
     def load_all(self) -> dict[str, UserRelationState]:
         users = self._load_payload().get("users")
@@ -123,6 +173,8 @@ class JsonRepository:
         states: dict[str, UserRelationState],
         events: list[RelationshipEventRecord],
     ) -> None:
+        if self._write_blocked:
+            raise OSError("refusing to overwrite a future relationship schema")
         payload = {
             "schema_version": SCHEMA_VERSION,
             "users": {key: state.as_dict() for key, state in states.items()},

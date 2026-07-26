@@ -294,14 +294,17 @@ class UserRelationState:
             self.trust_epistemic = self.trust_score
 
     def refresh_trust_score(self) -> None:
-        self.trust_score = sum(
-            (
-                self.trust_reliability,
-                self.trust_benevolence,
-                self.trust_integrity,
-                self.trust_epistemic,
+        self.trust_score = (
+            sum(
+                (
+                    self.trust_reliability,
+                    self.trust_benevolence,
+                    self.trust_integrity,
+                    self.trust_epistemic,
+                )
             )
-        ) / 4.0
+            / 4.0
+        )
 
     def as_dict(self) -> dict[str, object]:
         return {

@@ -50,6 +50,22 @@ class AffinityCalculator:
     def config(self) -> AffinityConfig:
         return self._config
 
+    def _limit_positive_gain(
+        self, event: InteractionEvent, state: UserRelationState, value: float
+    ) -> tuple[float, str]:
+        cfg = self._config
+        is_whitelisted = event.user_id in cfg.whitelist_user_ids
+        if not is_whitelisted:
+            remaining = max(0.0, cfg.non_whitelist_ceiling - state.affinity_score)
+            return min(value, remaining), "非白名单语义事件受朋友区上限约束"
+        trust_ready = state.trust_score >= cfg.whitelist_trust_gate
+        familiarity_ready = state.familiarity_score >= cfg.whitelist_familiarity_gate
+        if state.affinity_score >= cfg.high_affinity_threshold:
+            return 0.0, "已处于高好感区，正向语义事件不再刷分"
+        if not (trust_ready and familiarity_ready):
+            return min(value, 0.1), "白名单语义事件仍需通过信任与熟悉度门槛"
+        return value, "白名单语义事件通过关系门槛"
+
     def update_config(self, config: AffinityConfig) -> None:
         self._config = config
 
@@ -64,6 +80,9 @@ class AffinityCalculator:
         gain_key = _EVENT_GAIN_KEYS.get(event.kind)
         if gain_key is not None:
             value = float(getattr(cfg, gain_key))
+            if value > 0:
+                value, reason = self._limit_positive_gain(event, state, value)
+                return DimensionDelta(affinity=value, reason=reason)
             return DimensionDelta(affinity=value, reason=f"事件 {event.kind}")
 
         # 普通消息 / @：只给微小加成，且有冷却，避免刷屏刷好感。
