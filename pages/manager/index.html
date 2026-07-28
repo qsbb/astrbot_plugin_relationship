@@ -20,10 +20,11 @@
     </header>
 
     <nav class="tabs" aria-label="关系页面分区">
-      <button class="active" type="button">关系总览</button>
+      <button class="active" type="button" data-tab="overview">关系总览</button>
+      <button type="button" data-tab="settings">设置</button>
     </nav>
 
-    <section class="panel active">
+    <section class="panel active" data-panel="overview">
       <div class="cards" aria-label="关系概览">
         <article class="metric"><span>关系总数</span><strong data-stat="user_count">—</strong></article>
         <article class="metric"><span>高好感 / 信任圈</span><strong class="accent" data-stat="high_affinity_count">—</strong></article>
@@ -76,6 +77,22 @@
             <tbody id="relation-tbody"><tr class="empty-row"><td colspan="9">加载中…</td></tr></tbody>
           </table>
         </div>
+      </article>
+    </section>
+
+    <section class="panel" data-panel="settings">
+      <article class="card">
+        <div class="section-heading">
+          <div>
+            <h2>插件配置</h2>
+            <p>修改后保存即热应用，无需重启；配置持久化到 AstrBot 数据目录。</p>
+          </div>
+          <div class="toolbar">
+            <button id="btn-reset-config" type="button">重置</button>
+            <button id="btn-save-config" type="button" class="primary">保存</button>
+          </div>
+        </div>
+        <div id="config-form" class="config-form"><p class="config-loading">加载配置中…</p></div>
       </article>
     </section>
 

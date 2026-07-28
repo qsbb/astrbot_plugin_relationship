@@ -12,7 +12,9 @@ from typing import Any, Mapping
 from .affinity import AffinityConfig
 from .decay import DecayConfig
 from .familiarity import FamiliarityConfig
+from .followup import FollowupConfig
 from .policy import PolicyConfig
+from .prompts import PromptConfig
 from .trust import TrustConfig
 
 DEFAULTS: dict[str, Any] = {
@@ -48,6 +50,10 @@ DEFAULTS: dict[str, Any] = {
     "DECAY_TRUST_REGRESSION_PER_DAY": 0.005,
     "POLICY_ENABLE_PROMPT_FRAGMENT": True,
     "POLICY_ENABLE_STYLE_HINT": True,
+    "PROMPT_INJECT_ENABLED": True,
+    "FOLLOWUP_GUARD_ENABLED": True,
+    "FOLLOWUP_STREAK_LIMIT": 2,
+    "FOLLOWUP_WINDOW_SECONDS": 900,
     "SAVE_INTERVAL_SECONDS": 30.0,
     "LOG_LEVEL": "INFO",
 }
@@ -219,6 +225,24 @@ def policy_config(raw: Mapping[str, Any]) -> PolicyConfig:
     return PolicyConfig(
         enable_prompt_fragment=_get_bool(raw, "POLICY_ENABLE_PROMPT_FRAGMENT"),
         enable_style_hint=_get_bool(raw, "POLICY_ENABLE_STYLE_HINT"),
+        enable_followup_guard=_get_bool(raw, "FOLLOWUP_GUARD_ENABLED"),
+    )
+
+
+def followup_config(raw: Mapping[str, Any]) -> FollowupConfig:
+    return FollowupConfig(
+        enabled=_get_bool(raw, "FOLLOWUP_GUARD_ENABLED"),
+        streak_limit=_get_int(raw, "FOLLOWUP_STREAK_LIMIT", minimum=1, maximum=100),
+        window_seconds=_get_int(
+            raw, "FOLLOWUP_WINDOW_SECONDS", minimum=60, maximum=86400
+        ),
+    )
+
+
+def prompt_config(raw: Mapping[str, Any]) -> PromptConfig:
+    return PromptConfig(
+        inject_enabled=_get_bool(raw, "PROMPT_INJECT_ENABLED"),
+        followup_guard_enabled=_get_bool(raw, "FOLLOWUP_GUARD_ENABLED"),
     )
 
 

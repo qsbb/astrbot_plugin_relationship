@@ -220,6 +220,8 @@ class BehaviorAdvice:
     silence_suggested: bool = False
     silence_reason: str = ""
     prompt_fragments: tuple[str, ...] = ()
+    # 服务式追问收尾的建议档位：allow / avoid / forbid
+    followup: str = "avoid"
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -230,6 +232,7 @@ class BehaviorAdvice:
             "silence_suggested": self.silence_suggested,
             "silence_reason": self.silence_reason,
             "prompt_fragments": list(self.prompt_fragments),
+            "followup": self.followup,
         }
 
 
@@ -245,6 +248,8 @@ class RelationshipSnapshot:
     prompt_fragment: str = ""
     trust_dimensions: dict[str, int] = field(default_factory=dict)
     behavior: BehaviorAdvice = field(default_factory=BehaviorAdvice)
+    # 连续服务式追问轮次，仅用于诊断与抑制档位判断
+    followup_streak: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -258,6 +263,7 @@ class RelationshipSnapshot:
             "prompt_fragment": self.prompt_fragment,
             "trust_dimensions": dict(self.trust_dimensions),
             "behavior": self.behavior.as_dict(),
+            "followup_streak": self.followup_streak,
         }
 
 

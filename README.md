@@ -1,25 +1,25 @@
 # 凝心溯溪-情
 
-> 当前版本：`0.3.4`（以 `metadata.yaml` 与入口代码为准）
+> 版本号以 `metadata.yaml` 为唯一事实源，逐版变更见 `CHANGELOG.md`。
 > AstrBot 兼容范围：`>=4.16,<5`；支持平台：`aiocqhttp`。
-> 聊天命令：`/rel status`、`/rel reset`；管理页面入口：AstrBot 插件详情中的 `pages/manager`（只读）。
+> 聊天命令：`/rel status`、`/rel reset`；管理页面入口：AstrBot 插件详情中的 `pages/manager`（总览只读、设置可编辑并热应用）。
 
 > **边界说明**：本插件只记录关系状态、提供状态快照与只读表达建议。它不会把建议直接注入 LLM 请求，不会自动执行 `should_silence`，不会接管发送，也不会静默回复；是否采用建议由其他业务层显式读取并自行决定。
 
-`astrbot_plugin_relationship` v0.3.4 是凝心溯溪系列关系模块，统一管理 bot 对用户与会话的短期情绪、长期好感、信任和熟悉度，并输出结构化只读状态快照与行为建议。它不接管发送、不生成内容、不授予权限，也不执行跨插件动作。
+`astrbot_plugin_relationship` 是凝心溯溪系列关系模块，统一管理 bot 对用户与会话的短期情绪、长期好感、信任和熟悉度，并输出结构化只读状态快照与行为建议。它不接管发送、不生成内容、不授予权限，也不执行跨插件动作。
 
 ## 系列导航
 
 当前完整系列清单按知、言、序、情、声、核排列：
 
-| 字 | 模块 | 当前版本 | 命令/入口 | 说明 |
-|---|---|---|---|---|
-| [知](https://github.com/qsbb/astrbot_plugin_active_learner) | 知识学习 | `1.2.3.1` | `/memory` | 自动检索注入、多源学习、交叉验证 |
-| [言](https://github.com/qsbb/astrbot_plugin_conversation_flow) | 对话调节 | `v0.6.0` | `/convflow` | 沉默判断、智能分段、插话衔接 |
-| [序](https://github.com/qsbb/astrbot_plugin_identity_guardian) | 身份管理 | `v0.1.5` | `/idg` | 关系感知、权限边界、群组行动 |
-| [情](https://github.com/qsbb/astrbot_plugin_relationship) | 关系状态 | `0.3.4` | `/rel` | 情绪、好感、信任、熟悉度状态记录与只读建议（本插件） |
-| [声](https://github.com/qsbb/astrbot_plugin_voice_hub) | 语音合成 | `v0.7.4` | Pages / LLM 工具 | 双 TTS 后端、多音色管理、AI 导演 |
-| [核](https://github.com/qsbb/astrbot_plugin_update_manager) | 更新管理 | `0.3.0` | `/aup` | 安全检查、计划、串行更新与回滚 |
+| 字 | 模块 | 命令/入口 | 说明 |
+|---|---|---|---|
+| [知](https://github.com/qsbb/astrbot_plugin_active_learner) | 知识学习 | `/memory` | 自动检索注入、多源学习、交叉验证 |
+| [言](https://github.com/qsbb/astrbot_plugin_conversation_flow) | 对话调节 | `/convflow` | 沉默判断、智能分段、插话衔接 |
+| [序](https://github.com/qsbb/astrbot_plugin_identity_guardian) | 身份管理 | `/idg` | 关系感知、权限边界、群组行动 |
+| [情](https://github.com/qsbb/astrbot_plugin_relationship) | 关系状态 | `/rel` | 情绪、好感、信任、熟悉度状态记录与只读建议（本插件） |
+| [声](https://github.com/qsbb/astrbot_plugin_voice_hub) | 语音合成 | Pages / LLM 工具 | 双 TTS 后端、多音色管理、AI 导演 |
+| [核](https://github.com/qsbb/astrbot_plugin_update_manager) | 更新管理 | `/aup` | 安全检查、计划、串行更新与回滚 |
 
 ## 设计原则
 
@@ -110,7 +110,7 @@ await manager.reset(RelationshipScope(bot_id, user_id, group_id))
 
 ## 版本与测试
 
-当前版本为 `0.3.4`，以 `metadata.yaml` 与入口代码为准。0.3.4 统一以规范化 `business_now` 驱动事件审计、状态时间及好感/熟悉度冷却计算，阻止未来或回退时间戳绕过冷却，并补充对应回归测试。
+版本号以 `metadata.yaml` 为唯一事实源，逐版变更见 `CHANGELOG.md`。事件审计、状态时间及好感/熟悉度冷却计算统一由规范化 `business_now` 驱动，未来或回退时间戳无法绕过冷却。
 
 测试不依赖 AstrBot 运行时：
 

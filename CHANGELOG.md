@@ -1,6 +1,43 @@
 # 更新日志
 
-> 当前系列完整清单为知、言、序、情、声、核；本插件当前版本为 `0.3.4`。
+> 当前系列完整清单为知、言、序、情、声、核；版本号以 `metadata.yaml` 为唯一事实源。
+
+## 0.4.0 - 2026-07-28
+
+### 修复
+- 修复「插件配置页怎么改都不生效」：管理页写入的 overlay 默认优先于 AstrBot 插件配置页，但只有这一条规则时，用户后续在插件配置页改的值会被旧 overlay 永久压制——配置页显示新值、实际运行仍是旧值。现写入 overlay 时同时记录当时 AstrBot 侧的取值作为基线（与 overlay 同文件保存，用 `__astrbot_baseline__` 键区分，不引入第二个文件）；启动时若发现 AstrBot 侧的值已不等于基线，说明用户后来在配置页改过它，丢弃该字段的过期 overlay 并以配置页为准。清理结果立即落盘，不依赖下次保存；落盘失败只告警不阻塞启动。同源问题已先在知（`active_learner`）修复，本次移植到情。
+
+### 新增
+- 关系表达约束注入：新增 `core/prompts.py`，在 `on_llm_request`(priority=600) 阶段按关系快照拼装注入块，将语气（tone）、篇幅（length）、主动性（initiative）映射为本轮表达要求。注入块带幂等标记，重复触发不叠加；`should_silence` 或无有效规则时不注入。
+- 服务式追问抑制：新增 `core/followup.py`，识别“还需要我帮你…吗”“有需要随时告诉我”这类征询/待命式收尾。命中条件为尾部待命承诺，或尾部同时出现疑问标记与「征询 + 服务动作」组合。
+- 追问连续计数与分档抑制：`FollowupGuard` 按压力作用域统计连续追问收尾轮次，达到 `FOLLOWUP_STREAK_LIMIT` 后由软约束（soft）升级为硬约束（hard，禁止征询式结尾）；超过 `FOLLOWUP_WINDOW_SECONDS` 未复现自然清零，非追问收尾立即清零。
+- 新增 `on_llm_response`(priority=600) 钩子：仅统计本轮回复是否以服务式追问收尾，不读取上下文、不改写回复内容、不保存回复正文。
+- `RelationshipStateManager` 新增 `record_bot_reply` 与只读 `followup_state` 方法。
+- 新增配置项：`PROMPT_INJECT_ENABLED`、`FOLLOWUP_GUARD_ENABLED`、`FOLLOWUP_STREAK_LIMIT`（默认 2）、`FOLLOWUP_WINDOW_SECONDS`（默认 900），均可在 Plugin Page「设置」tab 内热更新。
+- `BehaviorAdvice` 新增 `followup` 建议字段与连续轮次计数，`/rel status` 同步展示当前追问抑制档位。
+
+### 变更
+- 插件定位由「只读建议」扩展为「只读建议 + 表达约束注入」，`metadata.yaml` 描述同步修正。关闭 `PROMPT_INJECT_ENABLED` 后退回 0.3.x 的纯只读行为。
+- README 删除系列导航里的「当前版本」列与正文中的版本字面量。那张跨插件版本快照表在发布后立刻过期——本次整改前表内六项已全部失准（如知记作 `1.2.3.1`、声记作 `v0.7.4`），读者据此判断兼容性反而被误导。查版本请看各仓库 `metadata.yaml`。
+
+### 测试
+- 新增追问识别、连续计数升级与窗口清零的单元测试；补充注入块拼装、幂等标记与静默场景不注入的回归测试；入口测试替身补齐 `on_llm_response` 装饰器。共 77 项测试通过，ruff check 与 format 均无告警。
+
+## 0.3.5 - 2026-07-27
+
+### 新增
+- Plugin Page 新增「设置」tab：支持在页面内查看和修改全部配置项（情绪、好感、信任、熟悉度、衰减、策略与持久化），按分组展示并带字段说明。
+- 新增 `config`(GET) 与 `config`(POST) 管理 API：GET 返回当前配置值与 schema，POST 校验后持久化到 `relationship-config.json` 并热应用到各计算器，无需重启。
+- 配置覆盖持久化：页面保存的配置写入 AstrBot 数据目录下的 `relationship-config.json`，重启后自动加载；同时尝试回写 AstrBot 原生配置。
+- `RelationshipStateManager` 新增 `update_runtime_config` 方法，支持运行时热更新情绪、好感、信任、熟悉度、衰减、策略与持久化全部参数。
+
+### 变更
+- 插件入口读取配置改为合并视图：页面覆盖 > 原生配置 > 默认值，保证页面修改优先级最高。
+- 页面 tab 切换改为 `data-tab`/`data-panel` 属性驱动，支持多 tab 扩展。
+
+### 测试
+- 新增配置 API 回归测试：覆盖 GET 返回 schema 与值、POST 持久化与热应用、未知字段拒绝、非法值拒绝、覆盖跨实例持久化、好感门槛热更新。
+- 新增页面 UI 静态检查：验证设置 tab 结构、配置表单容器、加载/保存/重置逻辑、tab 切换与 CSS 样式。
 
 ## 0.3.4 - 2026-07-27
 

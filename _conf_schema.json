@@ -177,6 +177,30 @@
     "description": "是否生成 response_style 语气/长度建议",
     "default": true
   },
+  "PROMPT_INJECT_ENABLED": {
+    "type": "bool",
+    "description": "是否把关系表达约束注入本轮 LLM 请求（关闭后仅保留只读建议）",
+    "default": true
+  },
+  "FOLLOWUP_GUARD_ENABLED": {
+    "type": "bool",
+    "description": "是否抑制“还需要我帮你…吗”这类服务式追问收尾",
+    "default": true
+  },
+  "FOLLOWUP_STREAK_LIMIT": {
+    "type": "int",
+    "description": "连续追问收尾达到该轮数后升级为强约束（禁止征询式结尾）",
+    "default": 2,
+    "minimum": 1,
+    "maximum": 100
+  },
+  "FOLLOWUP_WINDOW_SECONDS": {
+    "type": "int",
+    "description": "追问连续计数的有效窗口（秒），超时自然清零",
+    "default": 900,
+    "minimum": 60,
+    "maximum": 86400
+  },
   "SAVE_INTERVAL_SECONDS": {
     "type": "float",
     "description": "长期状态持久化节流间隔（秒），0 表示每次事件都落盘",

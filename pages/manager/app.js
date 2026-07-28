@@ -2,6 +2,20 @@ let bridge = null;
 
 const bands = ["高好感 / 信任圈", "朋友", "普通熟人", "保持距离", "边界警戒"];
 
+const CONFIG_GROUPS = [
+  { title: "情绪追踪", prefix: "MOOD_" },
+  { title: "好感计算", prefix: "AFFINITY_" },
+  { title: "信任计算", prefix: "TRUST_" },
+  { title: "熟悉度计算", prefix: "FAMILIARITY_" },
+  { title: "衰减速率", prefix: "DECAY_" },
+  { title: "策略与持久化", prefix: "POLICY_" },
+  { title: "存储与日志", prefix: "SAVE_" },
+  { title: "存储与日志", prefix: "LOG_" },
+];
+
+let configSchema = {};
+let configValues = {};
+
 function $(selector) {
   return document.querySelector(selector);
 }
@@ -64,6 +78,13 @@ async function apiGet(name) {
   return parseJsonResponse(await bridge.apiGet(name));
 }
 
+async function apiPost(name, body) {
+  if (!bridge || typeof bridge.apiPost !== "function") {
+    throw new Error("AstrBot 页面通信接口尚未就绪");
+  }
+  return parseJsonResponse(await bridge.apiPost(name, body));
+}
+
 function render(payload) {
   const summary = payload?.summary || {};
   const policy = payload?.policy || {};
@@ -112,14 +133,139 @@ async function load() {
   }
 }
 
+function renderConfigField(key, field, value) {
+  const id = `cfg-${key}`;
+  const desc = escapeHtml(field.description || key);
+  const label = `<label for="${id}" title="${desc}">${escapeHtml(key)}</label>`;
+  let input;
+  if (field.type === "bool") {
+    const checked = value === true || value === "true" ? " checked" : "";
+    input = `<input type="checkbox" id="${id}" data-key="${key}"${checked} />`;
+  } else if (field.options) {
+    const opts = field.options.map((opt) => (
+      `<option value="${escapeHtml(opt)}"${String(value) === String(opt) ? " selected" : ""}>${escapeHtml(opt)}</option>`
+    )).join("");
+    input = `<select id="${id}" data-key="${key}">${opts}</select>`;
+  } else {
+    const step = field.type === "float" ? "any" : "1";
+    const min = field.minimum ?? "";
+    const max = field.maximum ?? "";
+    input = `<input type="number" id="${id}" data-key="${key}" step="${step}"` +
+      (min !== "" ? ` min="${min}"` : "") + (max !== "" ? ` max="${max}"` : "") +
+      ` value="${escapeHtml(value)}" />`;
+  }
+  return `<div class="config-field">${label}<div class="config-input">${input}` +
+    `<span class="config-hint">${desc}</span></div></div>`;
+}
+
+function renderConfigForm(schema, config) {
+  const form = $("#config-form");
+  if (!form) return;
+  const used = new Set();
+  const sections = CONFIG_GROUPS.map((group) => {
+    const fields = Object.entries(schema)
+      .filter(([key]) => key.startsWith(group.prefix) && !used.has(key))
+      .map(([key, field]) => {
+        used.add(key);
+        return renderConfigField(key, field, config[key]);
+      });
+    if (!fields.length) return "";
+    return `<div class="config-group"><h3>${escapeHtml(group.title)}</h3>${fields.join("")}</div>`;
+  }).join("");
+
+  const remaining = Object.entries(schema)
+    .filter(([key]) => !used.has(key))
+    .map(([key, field]) => renderConfigField(key, field, config[key]));
+  const extra = remaining.length
+    ? `<div class="config-group"><h3>其他</h3>${remaining.join("")}</div>`
+    : "";
+
+  form.innerHTML = sections + extra || "<p class=\"config-loading\">无可配置项</p>";
+}
+
+async function loadConfig() {
+  try {
+    const data = await apiGet("config");
+    configSchema = data.schema || {};
+    configValues = data.config || {};
+    renderConfigForm(configSchema, configValues);
+  } catch (error) {
+    $("#config-form").innerHTML = `<p class="config-loading">加载配置失败：${escapeHtml(error?.message || String(error))}</p>`;
+  }
+}
+
+function collectConfigChanges() {
+  const changes = {};
+  document.querySelectorAll("#config-form [data-key]").forEach((el) => {
+    const key = el.dataset.key;
+    if (el.type === "checkbox") {
+      if (el.checked !== configValues[key]) changes[key] = el.checked;
+    } else {
+      const raw = el.value;
+      const field = configSchema[key];
+      if (!field) return;
+      if (field.type === "int") {
+        changes[key] = parseInt(raw, 10);
+      } else if (field.type === "float") {
+        changes[key] = parseFloat(raw);
+      } else {
+        changes[key] = raw;
+      }
+    }
+  });
+  return changes;
+}
+
+async function saveConfig() {
+  const button = $("#btn-save-config");
+  if (button) button.disabled = true;
+  try {
+    const changes = collectConfigChanges();
+    if (!Object.keys(changes).length) {
+      toast("没有需要保存的变更");
+      return;
+    }
+    const data = await apiPost("config", changes);
+    configValues = data.config || {};
+    renderConfigForm(configSchema, configValues);
+    toast("配置已保存并热应用");
+  } catch (error) {
+    toast(`保存配置失败：${error?.message || String(error)}`, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function resetConfigForm() {
+  renderConfigForm(configSchema, configValues);
+  toast("已重置为当前生效配置");
+}
+
+function initTabs() {
+  document.querySelectorAll(".tabs button[data-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const target = btn.dataset.tab;
+      document.querySelectorAll(".tabs button[data-tab]").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".panel[data-panel]").forEach((p) => p.classList.remove("active"));
+      btn.classList.add("active");
+      const panel = document.querySelector(`.panel[data-panel="${target}"]`);
+      if (panel) panel.classList.add("active");
+    });
+  });
+}
+
 async function init() {
   bridge = await resolveBridge();
   if (typeof bridge.ready === "function") await bridge.ready();
   if (!bridge || typeof bridge.apiGet !== "function") {
     throw new Error("AstrBot 页面通信接口不可用");
   }
+  initTabs();
   $("#btn-refresh").addEventListener("click", load);
+  $("#btn-save-config").addEventListener("click", saveConfig);
+  $("#btn-reset-config").addEventListener("click", resetConfigForm);
   await load();
+  await loadConfig();
 }
 
 init().catch((error) => {

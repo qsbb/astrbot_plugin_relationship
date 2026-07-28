@@ -238,9 +238,75 @@ tbody tr:hover { background: rgba(93, 214, 192, .045); }
 #toast.error { color: #fff; background: var(--danger); }
 #toast.hidden { opacity: 0; transform: translateY(10px); }
 
+button.primary {
+  color: #04201b;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+button.primary:hover { filter: brightness(1.1); }
+button.primary:disabled { opacity: .55; }
+
+.config-form { margin-top: 18px; }
+.config-loading { color: var(--muted); padding: 16px 0; }
+.config-group {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.config-group:last-child { border-bottom: 0; }
+.config-group h3 {
+  margin: 0 0 14px;
+  font-size: 15px;
+  color: var(--accent);
+}
+.config-field {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 14px;
+}
+.config-field label {
+  padding-top: 8px;
+  font-size: 13px;
+  font-family: ui-monospace, "SF Mono", monospace;
+  color: var(--text);
+  word-break: break-all;
+}
+.config-input { display: flex; flex-direction: column; gap: 4px; }
+.config-input input[type="number"],
+.config-input select {
+  width: 100%;
+  max-width: 320px;
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--text);
+  background: #102236;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.config-input input[type="number"]:focus,
+.config-input select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.config-input input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 6px;
+  accent-color: var(--accent);
+}
+.config-hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 @media (max-width: 900px) {
   .policy-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .visual-grid { grid-template-columns: 1fr; }
+  .config-field { grid-template-columns: 1fr; }
+  .config-field label { padding-top: 0; }
 }
 
 @media (max-width: 760px) {
