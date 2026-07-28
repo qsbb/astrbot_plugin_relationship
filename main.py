@@ -1,8 +1,9 @@
 """凝心溯溪-情：AstrBot 关系状态插件入口。
 
-本入口只负责 AstrBot 适配：
+本入口负责 AstrBot 适配与只读关系快照契约：
 - 在 on_llm_request 阶段记录互动；
-- 通过 Manager 提供结构化只读建议，不修改请求或发送流程；
+- 向请求注入仅影响表达方式的约束，不阻断事件或接管发送；
+- 通过版本化契约向其他插件提供不含原始关系分数的派生快照；
 - 提供 /rel status 与 /rel reset 命令；
 - terminate 时强制持久化长期状态。
 
@@ -50,16 +51,27 @@ from .core.models import InteractionEvent, RelationshipScope
 from .core.mood import MoodTracker
 from .core.prompts import INJECT_MARKER, build_injection_block
 from .core.repository import JsonRepository
+from .core.request_context import (
+    OWNER_RELATIONSHIP,
+    PHASE_LLM_REQUEST,
+    PHASE_LLM_RESPONSE,
+    add_reason,
+    ensure_context,
+    set_artifact,
+    set_flag,
+)
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 
 # overlay 文件中保存「写入当时 AstrBot 插件配置页取值」的键名。
 # 不属于用户配置，读写时都要排除。
 _BASELINE_KEY = "__astrbot_baseline__"
+RELATIONSHIP_SNAPSHOT_CONTRACT_NAME = "relationship.snapshot"
+RELATIONSHIP_SNAPSHOT_CONTRACT_VERSION = "1.0"
 
 
 @register(
@@ -71,6 +83,7 @@ _BASELINE_KEY = "__astrbot_baseline__"
 class RelationshipPlugin(Star):
     """关系状态插件。"""
 
+    PLUGIN_HEALTH_CONTRACT = "plugin.health@1.0"
     _current_instance: "RelationshipPlugin | None" = None
 
     def __init__(self, context: Context, config: Any = None) -> None:
@@ -120,6 +133,82 @@ class RelationshipPlugin(Star):
         RelationshipPlugin._current_instance = self
         self.logger.info("[relationship] 凝心溯溪-情 v%s 已加载", __version__)
 
+    def plugin_health(self) -> dict[str, object]:
+        checks = {
+            "manager_ready": getattr(self, "manager", None) is not None,
+            "config_ready": isinstance(getattr(self, "_raw_config", None), dict),
+            "data_dir_ready": getattr(self, "_data_dir", None) is not None,
+        }
+        reasons = [name.upper() for name, passed in checks.items() if not passed]
+        return {
+            "status": "ok" if not reasons else "unhealthy",
+            "checks": checks,
+            "reasons": reasons,
+            "version": __version__,
+        }
+
+    def relationship_snapshot_contract(self) -> dict[str, object]:
+        """声明供“言”等消费方使用的只读关系快照契约。"""
+        return {
+            "name": RELATIONSHIP_SNAPSHOT_CONTRACT_NAME,
+            "version": RELATIONSHIP_SNAPSHOT_CONTRACT_VERSION,
+            "plugin": PLUGIN_NAME,
+            "capabilities": ("read_snapshot",),
+            "privacy": "derived_only",
+        }
+
+    async def get_relationship_snapshot(
+        self, bot_id: str, user_id: str, group_id: str | None = None
+    ) -> dict[str, object]:
+        """返回稳定、最小化且不含原始关系分数的跨插件快照。"""
+        snapshot = await self.manager.get_snapshot(
+            str(bot_id or ""), str(user_id or ""), str(group_id) if group_id else None
+        )
+        return self._snapshot_payload(snapshot)
+
+    def _snapshot_payload(self, snapshot: Any) -> dict[str, object]:
+        """把内部状态压缩成可写入请求上下文的派生字段。"""
+        behavior = snapshot.behavior
+        silence_suggested = bool(
+            behavior.silence_suggested or snapshot.should_silence
+        )
+        return {
+            "version": RELATIONSHIP_SNAPSHOT_CONTRACT_VERSION,
+            "mood": snapshot.mood,
+            "willingness": snapshot.willingness,
+            "relationship_tier": self._relationship_tier(snapshot),
+            "behavior": {
+                "tone": behavior.tone,
+                "length": behavior.length,
+                "initiative": behavior.initiative,
+                "boundary": behavior.boundary,
+                "followup": behavior.followup,
+            },
+            "silence": {
+                "suggested": silence_suggested,
+                "reason": behavior.silence_reason if silence_suggested else "",
+                "strength": max(0, 100 - snapshot.willingness)
+                if silence_suggested
+                else 0,
+            },
+        }
+
+    @staticmethod
+    def _relationship_tier(snapshot: Any) -> str:
+        """把内部连续分数压缩成低敏感度关系档位。"""
+        affinity = int(snapshot.affinity)
+        trust = int(snapshot.trust)
+        familiarity = int(snapshot.familiarity)
+        if affinity < 35 or trust < 35:
+            return "guarded"
+        if affinity >= 80 and trust >= 75 and familiarity >= 60:
+            return "inner_circle"
+        if affinity >= 65 and trust >= 60 and familiarity >= 30:
+            return "close"
+        if familiarity >= 20 or (affinity + trust) / 2 >= 55:
+            return "familiar"
+        return "neutral"
+
     # ------------------------------------------------------------------
     # LLM 请求：记录事件、注入表达约束
     # ------------------------------------------------------------------
@@ -137,6 +226,8 @@ class RelationshipPlugin(Star):
         plugin = RelationshipPlugin._current_instance or self
         if not isinstance(plugin, RelationshipPlugin):
             return
+
+        request_context = ensure_context(event, PHASE_LLM_REQUEST)
 
         text = plugin._get_text(event)
         scope = plugin._get_scope(event)
@@ -156,6 +247,23 @@ class RelationshipPlugin(Star):
 
         # 即使关闭短期情绪，也继续记录长期关系；Manager 内部会跳过 mood 累积。
         snapshot = await plugin.manager.record(interaction)
+        set_artifact(
+            request_context,
+            OWNER_RELATIONSHIP,
+            "snapshot",
+            plugin._snapshot_payload(snapshot),
+        )
+        set_flag(
+            request_context,
+            OWNER_RELATIONSHIP,
+            "snapshot_ready",
+            True,
+        )
+        add_reason(
+            request_context,
+            OWNER_RELATIONSHIP,
+            "RELATIONSHIP_SNAPSHOT_READY",
+        )
 
         if snapshot.should_silence:
             plugin.logger.debug(
@@ -239,6 +347,12 @@ class RelationshipPlugin(Star):
         plugin = RelationshipPlugin._current_instance or self
         if not isinstance(plugin, RelationshipPlugin):
             return
+        request_context = ensure_context(event, PHASE_LLM_RESPONSE)
+        add_reason(
+            request_context,
+            OWNER_RELATIONSHIP,
+            "BOT_REPLY_OBSERVED",
+        )
         scope = plugin._get_scope(event)
         if not scope.bot_id or not scope.user_id:
             return

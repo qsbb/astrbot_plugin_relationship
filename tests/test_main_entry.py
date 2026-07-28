@@ -204,6 +204,27 @@ class MainEntryTest(unittest.TestCase):
         self.assertIn(f"/{main.PLUGIN_NAME}/overview", routes)
         self.assertIn(f"/{main.PLUGIN_NAME}/config", routes)
 
+    def test_relationship_snapshot_contract_is_versioned_and_privacy_limited(self):
+        contract = self.plugin.relationship_snapshot_contract()
+        self.assertEqual(contract["name"], "relationship.snapshot")
+        self.assertEqual(contract["version"], "1.0")
+        self.assertEqual(contract["privacy"], "derived_only")
+
+        snapshot = _run(
+            self.plugin.get_relationship_snapshot("bot-1", "user-1", "group-1")
+        )
+        self.assertEqual(snapshot["version"], "1.0")
+        self.assertIn(snapshot["relationship_tier"], {
+            "guarded", "neutral", "familiar", "close", "inner_circle"
+        })
+        self.assertEqual(
+            set(snapshot),
+            {"version", "mood", "willingness", "relationship_tier", "behavior", "silence"},
+        )
+        self.assertNotIn("affinity", snapshot)
+        self.assertNotIn("trust", snapshot)
+        self.assertNotIn("familiarity", snapshot)
+
     # -- on_llm_request 钩子 -------------------------------------------
 
     def test_on_llm_request_records_message_without_touching_req(self) -> None:

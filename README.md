@@ -4,7 +4,7 @@
 > AstrBot 兼容范围：`>=4.16,<5`；支持平台：`aiocqhttp`。
 > 聊天命令：`/rel status`、`/rel reset`；管理页面入口：AstrBot 插件详情中的 `pages/manager`（总览只读、设置可编辑并热应用）。
 
-> **边界说明**：本插件只记录关系状态、提供状态快照与只读表达建议。它不会把建议直接注入 LLM 请求，不会自动执行 `should_silence`，不会接管发送，也不会静默回复；是否采用建议由其他业务层显式读取并自行决定。
+> **边界说明**：本插件记录关系状态，并把语气、篇幅、主动性与收尾方式等表达约束注入 LLM 请求；它不会自动执行静默建议，不会接管发送，不会授予权限，也不改变事实判断。是否静默与如何交付由言显式决定。
 
 `astrbot_plugin_relationship` 是凝心溯溪系列关系模块，统一管理 bot 对用户与会话的短期情绪、长期好感、信任和熟悉度，并输出结构化只读状态快照与行为建议。它不接管发送、不生成内容、不授予权限，也不执行跨插件动作。
 
@@ -32,7 +32,19 @@
 
 ## 核心接口
 
-其他插件只应调用以下三个入口：
+跨插件消费者应通过入口类的版本化只读契约读取派生快照：
+
+```python
+contract = plugin.relationship_snapshot_contract()
+snapshot = await plugin.get_relationship_snapshot(bot_id, user_id, group_id)
+```
+
+契约名为 `relationship.snapshot`、版本为 `1.0`。返回值只包含 `mood`、
+`willingness`、`relationship_tier`、`behavior` 和 `silence`，不会暴露好感、信任、
+熟悉度原始分数。兼容的言插件会优先从 `ningxin.request_context` 1.0 读取同轮快照，
+避免重复查询。
+
+以下三个入口属于本插件内部状态层，供入口适配与测试使用，不作为跨插件契约：
 
 ```python
 from astrbot_plugin_relationship.core.manager import RelationshipStateManager
