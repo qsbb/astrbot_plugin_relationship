@@ -36,7 +36,6 @@ from .core.config import (
     affinity_config,
     decay_config,
     familiarity_config,
-    followup_config,
     log_level,
     mood_enabled,
     mood_kwargs,
@@ -54,7 +53,6 @@ from .core.repository import JsonRepository
 from .core.request_context import (
     OWNER_RELATIONSHIP,
     PHASE_LLM_REQUEST,
-    PHASE_LLM_RESPONSE,
     add_reason,
     ensure_context,
     set_artifact,
@@ -120,7 +118,6 @@ class RelationshipPlugin(Star):
             familiarity=FamiliarityCalculator(familiarity_config(merged)),
             decay_config=decay_config(merged),
             policy_config=policy_config(merged),
-            followup_config=followup_config(merged),
             save_interval_seconds=save_interval_seconds(merged),
             mood_enabled=mood_enabled(merged),
             logger=self.logger,
@@ -277,8 +274,7 @@ class RelationshipPlugin(Star):
         if kind == "command":
             return
 
-        followup = await plugin.manager.followup_state(scope)
-        block = build_injection_block(snapshot, followup, plugin._prompt_config)
+        block = build_injection_block(snapshot, plugin._prompt_config)
         if block:
             plugin._inject(req, block)
 
@@ -333,64 +329,6 @@ class RelationshipPlugin(Star):
         except Exception:
             return False
         return False
-
-    # ------------------------------------------------------------------
-    # LLM 响应：统计服务式追问收尾
-    # ------------------------------------------------------------------
-
-    @filter.on_llm_response(priority=600)
-    async def on_llm_response(
-        self, event: AstrMessageEvent, resp: Any, *args: Any, **kwargs: Any
-    ) -> None:
-        """统计 bot 本轮是否以服务式追问收尾；只记录特征，不修改回复。"""
-        del args, kwargs
-        plugin = RelationshipPlugin._current_instance or self
-        if not isinstance(plugin, RelationshipPlugin):
-            return
-        request_context = ensure_context(event, PHASE_LLM_RESPONSE)
-        add_reason(
-            request_context,
-            OWNER_RELATIONSHIP,
-            "BOT_REPLY_OBSERVED",
-        )
-        scope = plugin._get_scope(event)
-        if not scope.bot_id or not scope.user_id:
-            return
-        text = plugin._response_text(resp)
-        if not text:
-            return
-        decision = await plugin.manager.record_bot_reply(scope, text)
-        if decision.suppressed:
-            plugin.logger.debug(
-                "[relationship] 追问收尾 scope=%s level=%s streak=%d",
-                scope.session_key,
-                decision.level,
-                decision.streak,
-            )
-
-    @staticmethod
-    def _response_text(resp: Any) -> str:
-        """尽可能安全地取出本轮回复文本，取不到就放弃统计。"""
-        if resp is None:
-            return ""
-        if isinstance(resp, str):
-            return resp.strip()
-        for attr in ("completion_text", "text", "content"):
-            try:
-                value = getattr(resp, attr, None)
-            except Exception:
-                continue
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        getter = getattr(resp, "get_plain_text", None)
-        if callable(getter):
-            try:
-                value = getter()
-            except Exception:
-                return ""
-            if isinstance(value, str):
-                return value.strip()
-        return ""
 
     # ------------------------------------------------------------------
     # Plugin Page：关系总览与好感可视化

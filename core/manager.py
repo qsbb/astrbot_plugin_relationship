@@ -16,7 +16,6 @@ from typing import Any, Callable
 from .affinity import AffinityCalculator, AffinityConfig
 from .decay import DecayConfig, apply_decay
 from .familiarity import FamiliarityCalculator, FamiliarityConfig
-from .followup import FollowupConfig, FollowupDecision, FollowupGuard
 from .models import (
     HIGH_TRUST_EVENT_SOURCES,
     KIND_PROMISE_BROKEN,
@@ -56,7 +55,6 @@ class RelationshipStateManager:
         familiarity: FamiliarityCalculator | None = None,
         decay_config: DecayConfig | None = None,
         policy_config: PolicyConfig | None = None,
-        followup_config: FollowupConfig | None = None,
         clock: Callable[[], float] | None = None,
         save_interval_seconds: float = 30.0,
         mood_enabled: bool = True,
@@ -71,9 +69,6 @@ class RelationshipStateManager:
         self._decay_config = decay_config or DecayConfig()
         self._policy_config = policy_config or PolicyConfig()
         self._clock = clock or time.time
-        self._followup = FollowupGuard(
-            followup_config or FollowupConfig(), clock=self._clock
-        )
         self._save_interval = max(0.0, float(save_interval_seconds))
         self._mood_enabled = bool(mood_enabled)
         self._ledger_limit = max(100, int(event_ledger_limit))
@@ -128,7 +123,6 @@ class RelationshipStateManager:
                 decision,
                 state,
                 self._policy_config,
-                followup=self._followup.peek(scope.pressure_key),
             )
             if self._logger is not None:
                 self._logger.debug(
@@ -155,29 +149,9 @@ class RelationshipStateManager:
         async with self._lock:
             self._mood.reset(scope.session_key)
             self._mood.reset(scope.pressure_key)
-            self._followup.reset(scope.pressure_key)
             self._states.pop(scope.user_key, None)
             self._dirty = True
             self._save()
-
-    async def record_bot_reply(
-        self, scope: RelationshipScope, text: str
-    ) -> FollowupDecision:
-        """记录 bot 本轮实际回复，统计服务式追问收尾的连续轮次。
-
-        只统计文本特征，不保存回复正文；非追问收尾会清零连续计数。
-        """
-        async with self._lock:
-            return self._followup.record_reply(scope.pressure_key, text or "")
-
-    async def followup_state(self, scope: RelationshipScope) -> FollowupDecision:
-        """只读查询当前追问抑制档位。"""
-        async with self._lock:
-            return self._followup.peek(scope.pressure_key)
-
-    def followup_stats(self, scope: RelationshipScope) -> dict[str, object]:
-        """同步读取追问统计，供命令与页面自检使用。"""
-        return self._followup.stats(scope.pressure_key)
 
     def update_runtime_config(
         self,
@@ -189,7 +163,6 @@ class RelationshipStateManager:
         familiarity_config: FamiliarityConfig | None = None,
         decay_config: DecayConfig | None = None,
         policy_config: PolicyConfig | None = None,
-        followup_config: FollowupConfig | None = None,
         save_interval_seconds: float | None = None,
     ) -> None:
         """热应用配置变更：各计算器保留已有状态并自然收敛到新阈值。"""
@@ -207,8 +180,6 @@ class RelationshipStateManager:
             self._decay_config = decay_config
         if policy_config is not None:
             self._policy_config = policy_config
-        if followup_config is not None:
-            self._followup.update_config(followup_config)
         if save_interval_seconds is not None:
             self._save_interval = max(0.0, float(save_interval_seconds))
 
@@ -236,7 +207,6 @@ class RelationshipStateManager:
             decision,
             state,
             self._policy_config,
-            followup=self._followup.peek(scope.pressure_key),
         )
 
     def _record_mood(

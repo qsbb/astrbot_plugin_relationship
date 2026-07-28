@@ -224,6 +224,17 @@ class MainEntryTest(unittest.TestCase):
         self.assertNotIn("affinity", snapshot)
         self.assertNotIn("trust", snapshot)
         self.assertNotIn("familiarity", snapshot)
+        self.assertEqual(snapshot["behavior"]["followup"], "allow")
+
+    def test_followup_guard_is_no_longer_owned_by_relationship(self) -> None:
+        self.assertFalse(hasattr(main.RelationshipPlugin, "on_llm_response"))
+        schema = json.loads((_PLUGIN_ROOT / "_conf_schema.json").read_text("utf-8"))
+        for key in (
+            "FOLLOWUP_GUARD_ENABLED",
+            "FOLLOWUP_STREAK_LIMIT",
+            "FOLLOWUP_WINDOW_SECONDS",
+        ):
+            self.assertNotIn(key, schema)
 
     # -- on_llm_request 钩子 -------------------------------------------
 

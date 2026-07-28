@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .followup import LEVEL_HARD, LEVEL_SOFT, FollowupDecision
 from .mood import MOOD_ANNOYED, MOOD_LAZY, MoodDecision
 from .models import BehaviorAdvice, RelationshipSnapshot, UserRelationState, clamp_score
 
@@ -16,13 +15,6 @@ _LOW = 30
 class PolicyConfig:
     enable_prompt_fragment: bool = True
     enable_style_hint: bool = True
-    enable_followup_guard: bool = True
-
-
-# 服务式追问收尾的建议档位
-FOLLOWUP_ALLOW = "allow"
-FOLLOWUP_AVOID = "avoid"
-FOLLOWUP_FORBID = "forbid"
 
 
 def _familiarity_tier(value: int) -> str:
@@ -56,26 +48,10 @@ _AFFINITY_FRAGMENTS = {
 }
 
 
-def _followup_advice(
-    followup: FollowupDecision | None, enabled: bool
-) -> tuple[str, int]:
-    """把追问统计映射为建议档位；关闭开关时不给出抑制建议。"""
-    streak = followup.streak if followup else 0
-    if not enabled:
-        return FOLLOWUP_ALLOW, streak
-    level = followup.level if followup else None
-    if level == LEVEL_HARD:
-        return FOLLOWUP_FORBID, streak
-    if level == LEVEL_SOFT:
-        return FOLLOWUP_AVOID, streak
-    return FOLLOWUP_AVOID, streak
-
-
 def build_snapshot(
     decision: MoodDecision,
     state: UserRelationState,
     config: PolicyConfig | None = None,
-    followup: FollowupDecision | None = None,
 ) -> RelationshipSnapshot:
     """构造数据快照；所有行为字段仅为建议，不产生任何执行效果。"""
     cfg = config or PolicyConfig()
@@ -116,9 +92,6 @@ def build_snapshot(
         if min(trust_dimensions.values()) <= _LOW:
             fragments.append("涉及重要事实或行动时应先核验，不根据关系状态作出承诺。")
 
-    followup_advice, followup_streak = _followup_advice(
-        followup, cfg.enable_followup_guard
-    )
     behavior = BehaviorAdvice(
         tone=tone,
         length=length,
@@ -127,7 +100,6 @@ def build_snapshot(
         silence_suggested=decision.should_silence,
         silence_reason=decision.reason if decision.should_silence else "",
         prompt_fragments=tuple(fragments),
-        followup=followup_advice,
     )
     return RelationshipSnapshot(
         mood=decision.mood,
@@ -140,5 +112,4 @@ def build_snapshot(
         prompt_fragment=" ".join(fragments),
         trust_dimensions=trust_dimensions,
         behavior=behavior,
-        followup_streak=followup_streak,
     )

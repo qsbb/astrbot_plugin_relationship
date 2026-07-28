@@ -220,8 +220,8 @@ class BehaviorAdvice:
     silence_suggested: bool = False
     silence_reason: str = ""
     prompt_fragments: tuple[str, ...] = ()
-    # 服务式追问收尾的建议档位：allow / avoid / forbid
-    followup: str = "avoid"
+    # relationship.snapshot@1 兼容字段；追问抑制已迁到“言”，固定为 allow。
+    followup: str = "allow"
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -248,7 +248,7 @@ class RelationshipSnapshot:
     prompt_fragment: str = ""
     trust_dimensions: dict[str, int] = field(default_factory=dict)
     behavior: BehaviorAdvice = field(default_factory=BehaviorAdvice)
-    # 连续服务式追问轮次，仅用于诊断与抑制档位判断
+    # relationship.snapshot@1 兼容字段；不再由“情”推进。
     followup_streak: int = 0
 
     def as_dict(self) -> dict[str, object]:
