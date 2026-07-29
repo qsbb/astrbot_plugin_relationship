@@ -106,6 +106,11 @@ class RelationshipStateManager:
         self._last_save_at = 0.0
         self._lock = asyncio.Lock()
 
+    @property
+    def persistence_write_blocked(self) -> bool:
+        """Whether the repository is protecting data this version cannot write."""
+        return bool(getattr(self._repo, "write_blocked", False))
+
     async def record(self, event: InteractionEvent) -> RelationshipSnapshot:
         """幂等记录事件并返回快照；账本永不保存消息正文。"""
         async with self._lock:
@@ -246,6 +251,112 @@ class RelationshipStateManager:
                 self._dirty = dirty_before
                 raise
             return changed
+
+    async def merge_identity_states(
+        self,
+        bindings: tuple[tuple[str, tuple[str, ...]], ...],
+    ) -> tuple[str, ...]:
+        """Explicitly merge verified account/person states into target persons."""
+        async with self._lock:
+            states_before = {
+                key: UserRelationState.from_dict(value.as_dict())
+                for key, value in self._states.items()
+            }
+            dirty_before = self._dirty
+            try:
+                changed = tuple(
+                    relationship_key
+                    for relationship_key, source_state_keys in bindings
+                    if self._merge_identity_states_unlocked(
+                        relationship_key, source_state_keys
+                    )
+                )
+                if not changed:
+                    return ()
+                self._dirty = True
+                self._save(raise_errors=True)
+            except Exception:
+                self._states = states_before
+                self._dirty = dirty_before
+                raise
+            return changed
+
+    def recover_identity_merge_states(
+        self,
+        bindings: tuple[tuple[str, tuple[str, ...]], ...],
+    ) -> tuple[str, ...]:
+        """Finish a durable merge intent during single-threaded plugin startup."""
+        states_before = {
+            key: UserRelationState.from_dict(value.as_dict())
+            for key, value in self._states.items()
+        }
+        dirty_before = self._dirty
+        try:
+            changed = tuple(
+                relationship_key
+                for relationship_key, source_state_keys in bindings
+                if self._merge_identity_states_unlocked(
+                    relationship_key, source_state_keys
+                )
+            )
+            if not changed:
+                return ()
+            self._dirty = True
+            self._save(raise_errors=True)
+        except Exception:
+            self._states = states_before
+            self._dirty = dirty_before
+            raise
+        return changed
+
+    def _merge_identity_states_unlocked(
+        self, relationship_key: str, source_state_keys: tuple[str, ...]
+    ) -> bool:
+        relationship_key = str(relationship_key or "").strip()
+        parsed = parse_state_key(relationship_key)
+        if not parsed or parsed.get("kind") != "person":
+            return False
+        profile_id = parsed["profile_id"]
+        sources = tuple(
+            dict.fromkeys(
+                key
+                for value in source_state_keys
+                if (key := str(value or "").strip()) and key != relationship_key
+            )
+        )
+        sources = tuple(
+            key
+            for key in sources
+            if (candidate := parse_state_key(key))
+            and candidate.get("kind") in {"account", "person"}
+            and candidate.get("profile_id") == profile_id
+        )
+        present_sources = tuple(key for key in sources if key in self._states)
+        if not present_sources:
+            return False
+
+        candidates: list[UserRelationState] = []
+        canonical = self._states.get(relationship_key)
+        if canonical is not None:
+            candidates.append(canonical)
+        source_fingerprints: set[str] = set()
+        for key in present_sources:
+            state = self._states.get(key)
+            if state is None:
+                continue
+            fingerprint = repr(state.as_dict())
+            if fingerprint in source_fingerprints:
+                continue
+            source_fingerprints.add(fingerprint)
+            candidates.append(state)
+        if not candidates:
+            return False
+        self._states[relationship_key] = self._merge_states(
+            candidates, additive_counters=True
+        )
+        for key in present_sources:
+            self._states.pop(key, None)
+        return True
 
     def _bind_identity_unlocked(
         self, relationship_key: str, alias_state_keys: tuple[str, ...]
@@ -566,7 +677,9 @@ class RelationshipStateManager:
         return canonical
 
     @staticmethod
-    def _merge_states(states: list[UserRelationState]) -> UserRelationState:
+    def _merge_states(
+        states: list[UserRelationState], *, additive_counters: bool = False
+    ) -> UserRelationState:
         weights = [max(1, state.interaction_count) for state in states]
         total_weight = float(sum(weights))
 
@@ -582,6 +695,19 @@ class RelationshipStateManager:
             key=lambda state: state.initial_prior_applied_at,
             default=None,
         )
+        same_day_states = [
+            state for state in states if state.daily_anchor_day == latest.daily_anchor_day
+        ]
+        daily_positive = (
+            sum(state.daily_affinity_positive_used for state in same_day_states)
+            if additive_counters
+            else max(state.daily_affinity_positive_used for state in states)
+        )
+        daily_negative = (
+            sum(state.daily_affinity_negative_used for state in same_day_states)
+            if additive_counters
+            else max(state.daily_affinity_negative_used for state in states)
+        )
         merged = UserRelationState(
             affinity_score=weighted("affinity_score"),
             trust_reliability=weighted("trust_reliability"),
@@ -589,12 +715,8 @@ class RelationshipStateManager:
             trust_integrity=weighted("trust_integrity"),
             trust_epistemic=weighted("trust_epistemic"),
             familiarity_score=weighted("familiarity_score"),
-            daily_affinity_positive_used=max(
-                state.daily_affinity_positive_used for state in states
-            ),
-            daily_affinity_negative_used=max(
-                state.daily_affinity_negative_used for state in states
-            ),
+            daily_affinity_positive_used=daily_positive,
+            daily_affinity_negative_used=daily_negative,
             daily_anchor_day=latest.daily_anchor_day,
             interaction_count=sum(state.interaction_count for state in states),
             last_event_at=latest.last_event_at,
@@ -611,7 +733,9 @@ class RelationshipStateManager:
             except (TypeError, ValueError, OverflowError):
                 value = 0.0
             masses.append(value if math.isfinite(value) and value > 0.0 else 0.0)
-        merged.extra[EVIDENCE_MASS_KEY] = max(masses, default=0.0)
+        merged.extra[EVIDENCE_MASS_KEY] = (
+            sum(masses) if additive_counters else max(masses, default=0.0)
+        )
         merged.refresh_trust_score()
         return merged
 

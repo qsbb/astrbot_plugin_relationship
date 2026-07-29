@@ -123,3 +123,119 @@ def test_delete_only_removes_binding_file_entry(tmp_path):
     assert registry.delete("summer")
     assert registry.list_persons() == []
     assert not registry.delete("summer")
+
+
+def test_merge_account_appends_without_replacing_and_is_idempotent(tmp_path):
+    path = tmp_path / "identities.json"
+    registry = IdentityRegistry(path)
+    before = registry.upsert(_payload())
+    account = {
+        "platform_id": "discord-main",
+        "user_id": "discord-7",
+        "bot_id": "discord-bot",
+    }
+
+    merged, changed = registry.merge_account("summer", account)
+    enriched, enriched_changed = registry.merge_account(
+        "summer",
+        {**account, "session_id": "discord-main:DirectMessage:discord-7"},
+    )
+    repeated, repeated_changed = registry.merge_account(
+        "summer",
+        {**account, "session_id": "discord-main:DirectMessage:discord-7"},
+    )
+
+    assert changed
+    assert enriched_changed
+    assert not repeated_changed
+    assert merged.created_at == before.created_at
+    assert enriched.display_name == before.display_name
+    assert len(repeated.accounts) == 3
+    assert repeated.accounts[-1].session_id == "discord-main:DirectMessage:discord-7"
+    assert len(IdentityRegistry(path).get("summer").accounts) == 3
+
+
+def test_merge_account_rejects_account_owned_by_another_person(tmp_path):
+    registry = IdentityRegistry(tmp_path / "identities.json")
+    registry.upsert(_payload("summer"))
+    registry.upsert(
+        {
+            "person_id": "other",
+            "display_name": "另一个人",
+            "accounts": [{"platform_id": "discord-main", "user_id": "discord-7"}],
+        }
+    )
+
+    with pytest.raises(ValueError, match="ACCOUNT_ALREADY_BOUND"):
+        registry.merge_account(
+            "summer", {"platform_id": "discord-main", "user_id": "discord-7"}
+        )
+
+    assert len(registry.get("summer").accounts) == 2
+    assert len(registry.get("other").accounts) == 1
+
+
+def test_merge_account_rejects_conflicting_bot_or_session_metadata(tmp_path):
+    registry = IdentityRegistry(tmp_path / "identities.json")
+    registry.upsert(_payload("summer"))
+
+    with pytest.raises(ValueError, match="ACCOUNT_BOT_CONFLICT"):
+        registry.merge_account(
+            "summer",
+            {"platform_id": "qq-main", "user_id": "10001", "bot_id": "other-bot"},
+        )
+    with pytest.raises(ValueError, match="ACCOUNT_SESSION_CONFLICT"):
+        registry.merge_account(
+            "summer",
+            {
+                "platform_id": "qq-main",
+                "user_id": "10001",
+                "session_id": "qq-main:FriendMessage:other-user",
+            },
+        )
+    registry.upsert(
+        {
+            **_payload("summer"),
+            "accounts": [
+                {**_payload("summer")["accounts"][0], "memory_profile_id": "persona-a"},
+                _payload("summer")["accounts"][1],
+            ],
+        }
+    )
+    with pytest.raises(ValueError, match="ACCOUNT_MEMORY_PROFILE_CONFLICT"):
+        registry.merge_account(
+            "summer",
+            {
+                "platform_id": "qq-main",
+                "user_id": "10001",
+                "memory_profile_id": "persona-b",
+            },
+        )
+
+    assert len(registry.get("summer").accounts) == 2
+
+
+def test_merge_persons_moves_all_accounts_and_removes_source(tmp_path):
+    registry = IdentityRegistry(tmp_path / "identities.json")
+    target = registry.upsert(_payload("summer"))
+    registry.upsert(
+        {
+            "person_id": "work-account",
+            "display_name": "工作账号",
+            "accounts": [
+                {
+                    "platform_id": "discord-main",
+                    "user_id": "discord-7",
+                    "bot_id": "discord-bot",
+                }
+            ],
+        }
+    )
+
+    merged, source = registry.merge_persons("work-account", "summer")
+
+    assert source.person_id == "work-account"
+    assert registry.get("work-account") is None
+    assert merged.display_name == target.display_name
+    assert merged.created_at == target.created_at
+    assert len(merged.accounts) == 3

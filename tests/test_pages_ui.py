@@ -50,6 +50,26 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("async function deleteIdentity(", self.js)
         self.assertIn("function collectIdentity()", self.js)
 
+    def test_identity_merge_supports_account_person_and_orphan_sources(self) -> None:
+        self.assertIn('id="identity-merge-panel"', self.html)
+        self.assertIn('id="identity-merge-target"', self.html)
+        self.assertIn('id="btn-merge-identity"', self.html)
+        self.assertIn("async function mergeIdentity()", self.js)
+        self.assertIn('apiPost("identity-merge"', self.js)
+        self.assertIn("identityMergeConfirmTimer", self.js)
+        self.assertIn("RELATIONSHIP_STORAGE_READ_ONLY", self.js)
+        self.assertIn("请在 8 秒内再次点击", self.js)
+        self.assertIn('type: "account"', self.js)
+        self.assertIn('type: "person"', self.js)
+        self.assertIn('type: "orphan"', self.js)
+
+    def test_delete_uses_inline_confirmation_and_refreshes_overview(self) -> None:
+        self.assertNotIn("window.confirm", self.js)
+        self.assertIn("function armDeleteIdentity(", self.js)
+        self.assertIn('data-action="${pending ? "confirm-delete" : "delete"}"', self.js)
+        self.assertIn('apiPost("identity-delete"', self.js)
+        self.assertIn("Promise.all([loadIdentities(), load()])", self.js)
+
     def test_js_has_tab_switching(self) -> None:
         self.assertIn("function initTabs()", self.js)
         self.assertIn("data-tab", self.js)
@@ -103,10 +123,12 @@ class PagesUiTest(unittest.TestCase):
     def test_partial_initial_prior_failure_is_reported(self) -> None:
         self.assertIn("initial_prior?.requested", self.js)
         self.assertIn("账号归属已保存，但初始关系未应用", self.js)
+        self.assertIn("该关系已有互动，已保留现有关系", self.js)
+        self.assertIn("该账号已有互动，将保留现有关系", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.6.2", self.html)
-        self.assertIn("app.js?v=0.6.2", self.html)
+        self.assertIn("style.css?v=0.6.3", self.html)
+        self.assertIn("app.js?v=0.6.3", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)

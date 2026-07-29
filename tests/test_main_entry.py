@@ -222,6 +222,7 @@ class MainEntryTest(unittest.TestCase):
         self.assertIn(f"/{main.PLUGIN_NAME}/overview", routes)
         self.assertIn(f"/{main.PLUGIN_NAME}/config", routes)
         self.assertIn(f"/{main.PLUGIN_NAME}/identities", routes)
+        self.assertIn(f"/{main.PLUGIN_NAME}/identity-merge", routes)
         self.assertIn(f"/{main.PLUGIN_NAME}/identity-delete", routes)
 
     def test_relationship_snapshot_contract_is_versioned_and_privacy_limited(self):
@@ -649,6 +650,13 @@ class MainEntryTest(unittest.TestCase):
         self.plugin._request_json = fake_request_json
         return _run(self.plugin._page_save_identity())
 
+    def _merge_identity(self, body: dict) -> dict:
+        async def fake_request_json():
+            return body
+
+        self.plugin._request_json = fake_request_json
+        return _run(self.plugin._page_merge_identity())
+
     def test_identity_rejects_invalid_profile_before_persisting(self) -> None:
         payload = self._save_identity(
             {
@@ -770,6 +778,365 @@ class MainEntryTest(unittest.TestCase):
                 "account_count": 2,
                 "permission_identity_mode": "raw_platform_account",
             },
+        )
+
+    def test_quick_account_merge_preserves_both_relationship_states(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                    }
+                ],
+            }
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="target-1"), object()))
+        source_event = FakeEvent(
+            bot_id="discord-bot",
+            sender_id="discord-user",
+            platform_id="discord-main",
+            message_id="source-1",
+        )
+        _run(self.plugin.on_llm_request(source_event, object()))
+
+        body = {
+            "target_person_id": "summer",
+            "account": {
+                "platform_id": "discord-main",
+                "user_id": "discord-user",
+                "bot_id": "discord-bot",
+                "session_id": "discord-main:DirectMessage:discord-user",
+            },
+        }
+        first = self._merge_identity(body)
+        second = self._merge_identity(body)
+
+        target_key = "persona:default:person:summer"
+        source_key = "persona:default:account:discord-bot:user:discord-user"
+        self.assertTrue(first["success"])
+        self.assertTrue(first["state_merged"])
+        self.assertTrue(second["success"])
+        self.assertFalse(second["state_merged"])
+        self.assertEqual(self.plugin.manager._states[target_key].interaction_count, 2)
+        self.assertNotIn(source_key, self.plugin.manager._states)
+        self.assertEqual(len(self.plugin.identity_registry.get("summer").accounts), 2)
+
+    def test_registered_identity_merge_moves_accounts_and_relationship(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        self._save_identity(
+            {
+                "person_id": "work-account",
+                "display_name": "工作账号",
+                "accounts": [
+                    {
+                        "platform_id": "discord-main",
+                        "user_id": "discord-user",
+                        "bot_id": "discord-bot",
+                    }
+                ],
+            }
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="target-1"), object()))
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(
+                    bot_id="discord-bot",
+                    sender_id="discord-user",
+                    platform_id="discord-main",
+                    message_id="source-1",
+                ),
+                object(),
+            )
+        )
+
+        payload = self._merge_identity(
+            {"target_person_id": "summer", "source_person_id": "work-account"}
+        )
+
+        self.assertTrue(payload["success"])
+        self.assertTrue(payload["source_removed"])
+        self.assertIsNone(self.plugin.identity_registry.get("work-account"))
+        self.assertEqual(len(self.plugin.identity_registry.get("summer").accounts), 2)
+        self.assertEqual(
+            self.plugin.manager._states[
+                "persona:default:person:summer"
+            ].interaction_count,
+            2,
+        )
+        self.assertNotIn(
+            "persona:default:person:work-account", self.plugin.manager._states
+        )
+
+    def test_identity_merge_failure_restores_registry_and_relationship_states(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        self._save_identity(
+            {
+                "person_id": "work-account",
+                "display_name": "工作账号",
+                "accounts": [
+                    {
+                        "platform_id": "discord-main",
+                        "user_id": "discord-user",
+                        "bot_id": "discord-bot",
+                    }
+                ],
+            }
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="target-1"), object()))
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(
+                    bot_id="discord-bot",
+                    sender_id="discord-user",
+                    platform_id="discord-main",
+                    message_id="source-1",
+                ),
+                object(),
+            )
+        )
+
+        class FailingRepository:
+            @staticmethod
+            def save(_states, _events) -> None:
+                raise OSError("disk unavailable")
+
+        self.plugin.manager._repo = FailingRepository()
+        payload = self._merge_identity(
+            {"target_person_id": "summer", "source_person_id": "work-account"}
+        )
+
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error"], "RELATIONSHIP_PERSIST_FAILED")
+        self.assertIsNotNone(self.plugin.identity_registry.get("summer"))
+        self.assertIsNotNone(self.plugin.identity_registry.get("work-account"))
+        self.assertIn("persona:default:person:summer", self.plugin.manager._states)
+        self.assertIn("persona:default:person:work-account", self.plugin.manager._states)
+
+    def test_pending_account_merge_is_recovered_after_restart(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="target-1"), object()))
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(
+                    bot_id="discord-bot",
+                    sender_id="discord-user",
+                    platform_id="discord-main",
+                    message_id="source-1",
+                ),
+                object(),
+            )
+        )
+        target_key = "persona:default:person:summer"
+        source_key = "persona:default:account:discord-bot:user:discord-user"
+        account = {
+            "platform_id": "discord-main",
+            "user_id": "discord-user",
+            "bot_id": "discord-bot",
+        }
+        self.plugin._write_identity_merge_intent(
+            {
+                "mode": "account",
+                "target_person_id": "summer",
+                "source_person_id": "",
+                "account": {
+                    "platform_id": "discord-main",
+                    "user_id": "discord-user",
+                    "bot_id": "discord-bot",
+                    "session_id": "",
+                    "label": "",
+                    "memory_profile_id": "",
+                },
+                "source_accounts": [],
+                "bindings": [{"target": target_key, "sources": [source_key]}],
+            }
+        )
+        self.plugin.identity_registry.merge_account("summer", account)
+        self.assertIn(source_key, self.plugin.manager._states)
+
+        recovered = main.RelationshipPlugin(
+            self.context, {"SAVE_INTERVAL_SECONDS": 0}
+        )
+        self.plugin = recovered
+
+        self.assertFalse(
+            (Path(self._tmp.name) / main._IDENTITY_MERGE_JOURNAL_NAME).exists()
+        )
+        self.assertEqual(recovered.manager._states[target_key].interaction_count, 2)
+        self.assertNotIn(source_key, recovered.manager._states)
+
+    def test_conflicting_account_intent_is_not_recovered(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="target-1"), object()))
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(bot_id="other-bot", message_id="source-1"), object()
+            )
+        )
+        target_key = "persona:default:person:summer"
+        source_key = "persona:default:account:other-bot:user:user-1"
+        self.plugin._write_identity_merge_intent(
+            {
+                "mode": "account",
+                "target_person_id": "summer",
+                "source_person_id": "",
+                "account": {
+                    "platform_id": "qq-main",
+                    "user_id": "user-1",
+                    "bot_id": "other-bot",
+                    "session_id": "qq-main:FriendMessage:user-1",
+                    "label": "",
+                    "memory_profile_id": "",
+                },
+                "source_accounts": [],
+                "bindings": [{"target": target_key, "sources": [source_key]}],
+            }
+        )
+
+        recovered = main.RelationshipPlugin(
+            self.context, {"SAVE_INTERVAL_SECONDS": 0}
+        )
+        self.plugin = recovered
+
+        self.assertFalse(
+            (Path(self._tmp.name) / main._IDENTITY_MERGE_JOURNAL_NAME).exists()
+        )
+        self.assertEqual(recovered.manager._states[target_key].interaction_count, 1)
+        self.assertIn(source_key, recovered.manager._states)
+
+    def test_future_relationship_schema_blocks_identity_writes_and_recovery(
+        self,
+    ) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "Summer",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                    }
+                ],
+            }
+        )
+        data_dir = Path(self._tmp.name)
+        registry_path = data_dir / "identity_registry.json"
+        registry_before = registry_path.read_text(encoding="utf-8")
+        relationship_path = data_dir / "relationship_state.json"
+        relationship_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 999,
+                    "users": {
+                        "persona:default:account:bot-2:user:user-2": {
+                            "interaction_count": 4
+                        }
+                    },
+                    "events": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        account = self.plugin.identity_registry.get("summer").accounts[0]
+        journal_path = data_dir / main._IDENTITY_MERGE_JOURNAL_NAME
+        journal_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "mode": "account",
+                    "target_person_id": "summer",
+                    "source_person_id": "",
+                    "account": account.as_dict(),
+                    "source_accounts": [],
+                    "bindings": [
+                        {
+                            "target": "persona:default:person:summer",
+                            "sources": [account.state_key_for("default")],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        protected = main.RelationshipPlugin(
+            self.context, {"SAVE_INTERVAL_SECONDS": 0}
+        )
+        self.plugin = protected
+
+        self.assertTrue(protected.manager.persistence_write_blocked)
+        self.assertTrue(journal_path.exists())
+
+        merge_result = self._merge_identity(
+            {
+                "target_person_id": "summer",
+                "account": {
+                    "platform_id": "discord-main",
+                    "user_id": "user-2",
+                    "bot_id": "bot-2",
+                },
+            }
+        )
+        save_result = self._save_identity(
+            {
+                "person_id": "other",
+                "display_name": "Other",
+                "accounts": [
+                    {"platform_id": "tg-main", "user_id": "user-3"}
+                ],
+            }
+        )
+
+        async def delete_request_json():
+            return {"person_id": "summer"}
+
+        protected._request_json = delete_request_json
+        delete_result = _run(protected._page_delete_identity())
+
+        for result in (merge_result, save_result, delete_result):
+            self.assertFalse(result["success"])
+            self.assertEqual(result["error"], "RELATIONSHIP_STORAGE_READ_ONLY")
+        self.assertEqual(registry_path.read_text(encoding="utf-8"), registry_before)
+        self.assertTrue(journal_path.exists())
+        self.assertEqual(
+            json.loads(relationship_path.read_text(encoding="utf-8"))["schema_version"],
+            999,
         )
 
     def test_identity_can_apply_one_fixed_initial_prior(self) -> None:
@@ -940,6 +1307,64 @@ class MainEntryTest(unittest.TestCase):
         self.assertTrue(payload["success"])
         self.assertIsNone(self.plugin.identity_registry.get("summer"))
         self.assertIn("persona:default:person:summer", self.plugin.manager._states)
+        overview = _run(self.plugin._page_overview())
+        self.assertEqual(overview["users"][0]["orphaned_person_id"], "summer")
+
+    def test_orphaned_relationship_can_merge_into_existing_identity(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        self._save_identity(
+            {
+                "person_id": "old-work",
+                "display_name": "旧工作身份",
+                "accounts": [
+                    {
+                        "platform_id": "discord-main",
+                        "user_id": "discord-user",
+                        "bot_id": "discord-bot",
+                    }
+                ],
+            }
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="target-1"), object()))
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(
+                    bot_id="discord-bot",
+                    sender_id="discord-user",
+                    platform_id="discord-main",
+                    message_id="source-1",
+                ),
+                object(),
+            )
+        )
+
+        async def delete_request_json():
+            return {"person_id": "old-work"}
+
+        self.plugin._request_json = delete_request_json
+        self.assertTrue(_run(self.plugin._page_delete_identity())["success"])
+        payload = self._merge_identity(
+            {"target_person_id": "summer", "source_person_id": "old-work"}
+        )
+
+        self.assertTrue(payload["success"])
+        self.assertTrue(payload["state_merged"])
+        self.assertFalse(payload["source_removed"])
+        self.assertEqual(
+            self.plugin.manager._states[
+                "persona:default:person:summer"
+            ].interaction_count,
+            2,
+        )
+        self.assertNotIn("persona:default:person:old-work", self.plugin.manager._states)
 
     # -- Plugin Page 配置 API ------------------------------------------
 

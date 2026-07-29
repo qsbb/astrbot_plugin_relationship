@@ -284,6 +284,32 @@ button.primary:disabled { opacity: .55; }
 .account-count { color: var(--muted); font-size: 12px; }
 .identity-actions { display: flex; gap: 6px; }
 .identity-actions button { padding: 7px 9px; border-radius: 8px; }
+.identity-merge-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, .7fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin-top: 16px;
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.identity-merge-panel[hidden] { display: none; }
+.identity-merge-copy { align-self: center; }
+.identity-merge-copy strong,
+.identity-merge-copy small { display: block; }
+.identity-merge-copy small,
+.identity-merge-panel label { color: var(--muted); font-size: 12px; }
+.identity-merge-panel label { display: grid; gap: 5px; }
+.identity-merge-panel select {
+  min-width: 0;
+  width: 100%;
+  padding: 9px 10px;
+  color: var(--text);
+  background: #102236;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
 .identity-fields {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -400,6 +426,7 @@ button.primary:disabled { opacity: .55; }
   .config-field { grid-template-columns: 1fr; }
   .config-field label { padding-top: 0; }
   .identity-grid { grid-template-columns: 1fr; }
+  .identity-merge-panel { grid-template-columns: 1fr; align-items: stretch; }
   .account-row { grid-template-columns: 1fr 1fr; }
   .account-row .icon-command { align-self: end; }
 }

@@ -141,7 +141,10 @@ class IdentityRegistry:
         ]
 
     def get(self, person_id: str) -> PersonIdentity | None:
-        return self._persons.get(_clean(person_id, 64))
+        person_id = str(person_id or "").strip()
+        if not _PERSON_ID_RE.fullmatch(person_id):
+            return None
+        return self._persons.get(person_id)
 
     def snapshot(self) -> dict[str, PersonIdentity]:
         """Return an immutable-value snapshot for a surrounding transaction."""
@@ -231,7 +234,141 @@ class IdentityRegistry:
         return resolved
 
     def upsert(self, payload: dict[str, Any]) -> PersonIdentity:
-        person_id = _clean(payload.get("person_id"), 64)
+        person = self._build_person(payload, self._persons)
+        updated = dict(self._persons)
+        updated[person.person_id] = person
+        self._write(updated)
+        self._persons = updated
+        return person
+
+    def merge_account(
+        self, person_id: str, raw_account: dict[str, Any]
+    ) -> tuple[PersonIdentity, bool]:
+        """Append or enrich one verified account without replacing existing accounts."""
+        person, changed, _ = self.preview_merge_account(person_id, raw_account)
+        if not changed:
+            return person, False
+        updated = dict(self._persons)
+        updated[person.person_id] = person
+        self._write(updated)
+        self._persons = updated
+        return person, True
+
+    def preview_merge_account(
+        self, person_id: str, raw_account: dict[str, Any]
+    ) -> tuple[PersonIdentity, bool, PlatformAccount]:
+        """Validate an account merge and return its exact post-merge value."""
+        person_id = str(person_id or "").strip()
+        if not _PERSON_ID_RE.fullmatch(person_id):
+            raise ValueError("INVALID_PERSON_ID")
+        current = self._persons.get(person_id)
+        if current is None:
+            raise ValueError("TARGET_PERSON_NOT_FOUND")
+        if not isinstance(raw_account, dict):
+            raise ValueError("INVALID_ACCOUNT")
+        raw_memory_profile = _clean(raw_account.get("memory_profile_id"), 64)
+        if raw_memory_profile:
+            try:
+                validate_profile_id(raw_memory_profile)
+            except ValueError as exc:
+                raise ValueError("INVALID_MEMORY_PROFILE_ID") from exc
+
+        incoming = PlatformAccount.from_dict(raw_account)
+        if not incoming.platform_id or not incoming.user_id:
+            raise ValueError("ACCOUNT_ID_REQUIRED")
+        owner_key = (incoming.platform_id.casefold(), incoming.user_id)
+        accounts = list(current.accounts)
+        changed = False
+        merged_account = incoming
+        for index, existing in enumerate(accounts):
+            existing_key = (existing.platform_id.casefold(), existing.user_id)
+            if existing_key != owner_key:
+                continue
+            if existing.bot_id and incoming.bot_id and existing.bot_id != incoming.bot_id:
+                raise ValueError("ACCOUNT_BOT_CONFLICT")
+            if (
+                existing.session_id
+                and incoming.session_id
+                and existing.session_id != incoming.session_id
+            ):
+                raise ValueError("ACCOUNT_SESSION_CONFLICT")
+            if (
+                existing.memory_profile_id
+                and incoming.memory_profile_id
+                and existing.memory_profile_id != incoming.memory_profile_id
+            ):
+                raise ValueError("ACCOUNT_MEMORY_PROFILE_CONFLICT")
+            merged_account = PlatformAccount(
+                platform_id=existing.platform_id,
+                user_id=existing.user_id,
+                bot_id=incoming.bot_id or existing.bot_id,
+                session_id=incoming.session_id or existing.session_id,
+                label=incoming.label or existing.label,
+                memory_profile_id=(
+                    incoming.memory_profile_id or existing.memory_profile_id
+                ),
+            )
+            changed = merged_account != existing
+            accounts[index] = merged_account
+            break
+        else:
+            accounts.append(incoming)
+            changed = True
+
+        if not changed:
+            return current, False, merged_account
+        person = self._build_person(
+            {
+                "person_id": current.person_id,
+                "display_name": current.display_name,
+                "accounts": [account.as_dict() for account in accounts],
+            },
+            self._persons,
+        )
+        return person, True, merged_account
+
+    def merge_persons(
+        self, source_person_id: str, target_person_id: str
+    ) -> tuple[PersonIdentity, PersonIdentity]:
+        """Move all accounts from source into target and remove source atomically."""
+        source_person_id = str(source_person_id or "").strip()
+        target_person_id = str(target_person_id or "").strip()
+        if not _PERSON_ID_RE.fullmatch(source_person_id) or not _PERSON_ID_RE.fullmatch(
+            target_person_id
+        ):
+            raise ValueError("INVALID_PERSON_ID")
+        if source_person_id == target_person_id:
+            raise ValueError("SAME_PERSON_IDENTITY")
+        source = self._persons.get(source_person_id)
+        target = self._persons.get(target_person_id)
+        if source is None:
+            raise ValueError("SOURCE_PERSON_NOT_FOUND")
+        if target is None:
+            raise ValueError("TARGET_PERSON_NOT_FOUND")
+
+        remaining = dict(self._persons)
+        remaining.pop(source_person_id, None)
+        merged = self._build_person(
+            {
+                "person_id": target.person_id,
+                "display_name": target.display_name,
+                "accounts": [
+                    account.as_dict() for account in (*target.accounts, *source.accounts)
+                ],
+            },
+            remaining,
+        )
+        remaining[target_person_id] = merged
+        self._write(remaining)
+        self._persons = remaining
+        return merged, source
+
+    def _build_person(
+        self,
+        payload: dict[str, Any],
+        persons: dict[str, PersonIdentity],
+    ) -> PersonIdentity:
+        person_id = str(payload.get("person_id") or "").strip()
         if not person_id:
             person_id = f"person_{uuid.uuid4().hex[:12]}"
         if not _PERSON_ID_RE.fullmatch(person_id):
@@ -270,7 +407,7 @@ class IdentityRegistry:
                 seen_sessions.add(account.session_id)
             accounts.append(account)
 
-        for existing in self._persons.values():
+        for existing in persons.values():
             if existing.person_id == person_id:
                 continue
             occupied = {
@@ -284,26 +421,23 @@ class IdentityRegistry:
             }
             if occupied_sessions.intersection(seen_sessions):
                 raise ValueError("SESSION_ALREADY_BOUND")
-        if person_id not in self._persons and len(self._persons) >= MAX_PERSONS:
+        if person_id not in persons and len(persons) >= MAX_PERSONS:
             raise ValueError("TOO_MANY_PERSONS")
 
         now = time.time()
-        old = self._persons.get(person_id)
-        person = PersonIdentity(
+        old = persons.get(person_id)
+        return PersonIdentity(
             person_id=person_id,
             display_name=display_name,
             accounts=tuple(accounts),
             created_at=old.created_at if old else now,
             updated_at=now,
         )
-        updated = dict(self._persons)
-        updated[person_id] = person
-        self._write(updated)
-        self._persons = updated
-        return person
 
     def delete(self, person_id: str) -> bool:
-        person_id = _clean(person_id, 64)
+        person_id = str(person_id or "").strip()
+        if not _PERSON_ID_RE.fullmatch(person_id):
+            raise ValueError("INVALID_PERSON_ID")
         if person_id not in self._persons:
             return False
         updated = dict(self._persons)

@@ -24,6 +24,14 @@ let identities = [];
 let overviewUsers = [];
 let relationshipProfiles = ["default"];
 let defaultRelationshipProfile = "default";
+let identityMergeSource = null;
+let identityMergeConfirmTimer = null;
+let pendingDeletePersonId = "";
+let pendingDeleteTimer = null;
+
+const API_ERROR_MESSAGES = {
+  RELATIONSHIP_STORAGE_READ_ONLY: "关系数据由更高版本写入，当前版本已暂停账号归属修改；请先升级插件",
+};
 
 function $(selector) {
   return document.querySelector(selector);
@@ -75,7 +83,7 @@ async function resolveBridge(timeout = 3000) {
 function parseJsonResponse(value) {
   const data = typeof value === "string" ? JSON.parse(value) : value;
   if (data?.success === false) {
-    throw new Error(data.error || data.detail || "请求失败");
+    throw new Error(API_ERROR_MESSAGES[data.error] || data.error || data.detail || "请求失败");
   }
   return data?.data ?? data;
 }
@@ -121,9 +129,16 @@ function render(payload) {
     return;
   }
 
-  tbody.innerHTML = users.map((user, index) => (
-    `<tr><td>${escapeHtml(user.display_name || user.user_id)}`
-    + `${user.display_name ? `<small class="user-id">${escapeHtml(user.user_id)} · ${user.linked_accounts} 个账号</small>` : ""}</td>`
+  tbody.innerHTML = users.map((user, index) => {
+    const orphaned = Boolean(user.orphaned_person_id);
+    const actionLabel = user.person_id ? "编辑归属" : (orphaned ? "合并历史关系" : "快速归属");
+    const identityHint = orphaned
+      ? `<small class="user-id">${escapeHtml(user.orphaned_person_id)} · 账号归属已删除</small>`
+      : (user.display_name
+        ? `<small class="user-id">${escapeHtml(user.user_id)} · ${user.linked_accounts} 个账号</small>`
+        : "");
+    return (`<tr><td>${escapeHtml(user.display_name || user.user_id)}`
+    + `${identityHint}</td>`
     + `<td><code class="profile-id">${escapeHtml(user.relationship_profile_id || defaultRelationshipProfile)}</code></td>`
     + `<td>${escapeHtml(user.band)}</td>`
     + `<td>${user.affinity}</td><td>${user.trust}</td><td>${user.familiarity}</td><td>${user.interaction_count}</td>`
@@ -131,8 +146,8 @@ function render(payload) {
     + `<td>${user.boundary === "开放" ? '<span class="badge safe">开放</span>' : '<span class="badge warn">谨慎</span>'}</td>`
     + `<td>${formatTime(user.last_event_at)}</td>`
     + `<td><button type="button" class="quick-edit-command" data-quick-edit="${index}">`
-    + `${user.person_id ? "编辑归属" : "快速归属"}</button></td></tr>`
-  )).join("");
+    + `${actionLabel}</button></td></tr>`);
+  }).join("");
 }
 
 async function load() {
@@ -273,27 +288,101 @@ function accountRow(account = {}) {
     + `</div>`;
 }
 
+function setInitialPriorAvailability(enabled, hint = "仅能为尚未产生互动的新关系设置一次。") {
+  const select = $("#initial-prior");
+  select.disabled = !enabled;
+  if (!enabled) select.value = "";
+  $("#initial-prior-hint").textContent = hint;
+}
+
+function hideIdentityMerge() {
+  clearTimeout(identityMergeConfirmTimer);
+  identityMergeConfirmTimer = null;
+  identityMergeSource = null;
+  const panel = $("#identity-merge-panel");
+  panel.hidden = true;
+  $("#identity-merge-target").innerHTML = "";
+  const button = $("#btn-merge-identity");
+  button.disabled = false;
+  button.dataset.confirmed = "";
+  button.textContent = "合并到此身份";
+}
+
+function resetIdentityMergeConfirmation() {
+  clearTimeout(identityMergeConfirmTimer);
+  identityMergeConfirmTimer = null;
+  const button = $("#btn-merge-identity");
+  button.dataset.confirmed = "";
+  button.textContent = identityMergeSource?.type === "account" ? "合并账号" : "合并身份";
+}
+
+function renderIdentityMergeTargets() {
+  if (!identityMergeSource) return;
+  const excluded = identityMergeSource.type === "person"
+    ? identityMergeSource.source_person_id
+    : "";
+  const targets = identities.filter((person) => person.person_id !== excluded);
+  const panel = $("#identity-merge-panel");
+  if (!targets.length) {
+    panel.hidden = true;
+    return;
+  }
+  $("#identity-merge-target").innerHTML = targets.map((person) => (
+    `<option value="${escapeHtml(person.person_id)}">${escapeHtml(person.display_name)} · ${escapeHtml(person.person_id)}</option>`
+  )).join("");
+  panel.hidden = false;
+}
+
+function showIdentityMerge(source) {
+  identityMergeSource = source;
+  const isAccount = source.type === "account";
+  const isOrphan = source.type === "orphan";
+  $("#identity-merge-title").textContent = isAccount
+    ? "也可以合并到已有身份"
+    : (isOrphan ? "合并未归属历史关系" : "合并当前身份");
+  $("#identity-merge-hint").textContent = isAccount
+    ? "把这个平台账号及其已有关系合并到已确认的自然人。"
+    : (isOrphan
+      ? "把删除归属后保留的历史关系迁移到已确认的自然人。"
+      : "来源身份会被移除；账号、关系和记忆归属会并入目标身份。");
+  $("#btn-merge-identity").textContent = isAccount ? "合并账号" : "合并身份";
+  renderIdentityMergeTargets();
+}
+
 function resetIdentityEditor(accountCount = 1) {
+  hideIdentityMerge();
   $("#identity-editor-title").textContent = "新建自然人";
   $("#person-display-name").value = "";
+  $("#person-display-name").readOnly = false;
   $("#person-id").value = "";
   $("#person-id").readOnly = false;
   renderRelationshipProfileOptions(defaultRelationshipProfile);
   $("#initial-prior").value = "";
+  setInitialPriorAvailability(true);
   $("#account-list").innerHTML = Array.from({ length: accountCount }, () => accountRow()).join("");
+  $("#btn-add-account").hidden = false;
+  $("#btn-save-person").hidden = false;
+  $("#btn-save-person").textContent = "保存账号归属";
 }
 
 function editIdentity(person) {
+  hideIdentityMerge();
   $("#identity-editor-title").textContent = "编辑账号归属";
   $("#person-display-name").value = person.display_name || "";
+  $("#person-display-name").readOnly = false;
   $("#person-id").value = person.person_id || "";
   $("#person-id").readOnly = true;
   renderRelationshipProfileOptions(person.relationship_profile_id || defaultRelationshipProfile);
   $("#initial-prior").value = "";
+  setInitialPriorAvailability(true);
   $("#account-list").innerHTML = (person.accounts || []).map(accountRow).join("") || accountRow();
+  $("#btn-add-account").hidden = false;
+  $("#btn-save-person").hidden = false;
+  $("#btn-save-person").textContent = "保存账号归属";
 }
 
 function activateTab(target) {
+  if (target !== "identities") resetIdentityMergeConfirmation();
   document.querySelectorAll(".tabs button[data-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === target);
   });
@@ -322,14 +411,34 @@ async function quickEditRelationship(index) {
     return;
   }
 
+  if (user.orphaned_person_id) {
+    resetIdentityEditor(0);
+    $("#identity-editor-title").textContent = "未归属历史关系";
+    $("#person-display-name").value = "账号归属已删除";
+    $("#person-display-name").readOnly = true;
+    $("#person-id").value = user.orphaned_person_id;
+    $("#person-id").readOnly = true;
+    renderRelationshipProfileOptions(user.relationship_profile_id || defaultRelationshipProfile);
+    setInitialPriorAvailability(false, "历史关系不会被初始关系覆盖。");
+    $("#account-list").innerHTML = '<p class="config-loading">账号归属已删除；关系与记忆原始数据仍保留。</p>';
+    $("#btn-add-account").hidden = true;
+    $("#btn-save-person").hidden = true;
+    showIdentityMerge({ type: "orphan", source_person_id: user.orphaned_person_id });
+    document.querySelector(".identity-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+
   const account = user.quick_account || {};
+  resetIdentityEditor(0);
   $("#identity-editor-title").textContent = "从关系记录创建账号归属";
   $("#person-display-name").value = account.display_name || user.user_id || "";
   $("#person-id").value = "";
   $("#person-id").readOnly = false;
   renderRelationshipProfileOptions(user.relationship_profile_id || defaultRelationshipProfile);
-  $("#initial-prior").value = "";
+  setInitialPriorAvailability(false, "该账号已有互动，将保留现有关系，不应用初始关系。");
   $("#account-list").innerHTML = accountRow(account);
+  $("#btn-save-person").textContent = "保存为新身份";
+  showIdentityMerge({ type: "account" });
 
   const missing = [];
   if (!account.platform_id) missing.push("平台 ID");
@@ -351,6 +460,42 @@ function renderRelationshipProfileOptions(selectedProfile) {
   )).join("");
 }
 
+function clearDeleteConfirmation(rerender = true) {
+  pendingDeletePersonId = "";
+  clearTimeout(pendingDeleteTimer);
+  pendingDeleteTimer = null;
+  if (rerender) renderIdentityList();
+}
+
+function armDeleteIdentity(personId) {
+  pendingDeletePersonId = personId;
+  clearTimeout(pendingDeleteTimer);
+  pendingDeleteTimer = setTimeout(() => clearDeleteConfirmation(), 8000);
+  renderIdentityList();
+  toast("请在 8 秒内再次点击“确认删除”；关系和记忆原始数据不会被删除");
+}
+
+function renderIdentityList() {
+  const list = $("#identity-list");
+  if (!identities.length) {
+    list.innerHTML = '<p class="config-loading">暂无自然人身份</p>';
+    return;
+  }
+  list.innerHTML = identities.map((person) => {
+    const pending = pendingDeletePersonId === person.person_id;
+    const mergeButton = identities.length > 1
+      ? '<button type="button" data-action="merge">合并</button>'
+      : "";
+    return (`<div class="identity-item" data-person-id="${escapeHtml(person.person_id)}">`
+      + `<div><strong>${escapeHtml(person.display_name)}</strong><span>${escapeHtml(person.person_id)}</span></div>`
+      + `<span class="account-count">${(person.accounts || []).length} 个账号</span>`
+      + `<div class="identity-actions"><button type="button" data-action="edit">编辑</button>`
+      + mergeButton
+      + `<button type="button" data-action="${pending ? "confirm-delete" : "delete"}" class="danger-command">`
+      + `${pending ? "确认删除" : "删除"}</button></div></div>`);
+  }).join("");
+}
+
 function renderIdentities(payload) {
   identities = payload?.persons || [];
   defaultRelationshipProfile = payload?.default_relationship_profile || "default";
@@ -365,18 +510,11 @@ function renderIdentities(payload) {
   $("#memory-bridge-status").textContent = bridgeAvailable
     ? "Memory Companion 已就绪"
     : "Memory Companion 未就绪，关系仍会跨平台共享";
-  const list = $("#identity-list");
-  if (!identities.length) {
-    list.innerHTML = '<p class="config-loading">暂无自然人身份</p>';
-    return;
+  if (pendingDeletePersonId && !identities.some((person) => person.person_id === pendingDeletePersonId)) {
+    clearDeleteConfirmation(false);
   }
-  list.innerHTML = identities.map((person) => (
-    `<div class="identity-item" data-person-id="${escapeHtml(person.person_id)}">`
-    + `<div><strong>${escapeHtml(person.display_name)}</strong><span>${escapeHtml(person.person_id)}</span></div>`
-    + `<span class="account-count">${(person.accounts || []).length} 个账号</span>`
-    + `<div class="identity-actions"><button type="button" data-action="edit">编辑</button>`
-    + `<button type="button" data-action="delete" class="danger-command">删除</button></div></div>`
-  )).join("");
+  renderIdentityList();
+  renderIdentityMergeTargets();
 }
 
 async function loadIdentities() {
@@ -413,11 +551,17 @@ async function saveIdentity() {
       throw new Error("请填写显示名称和至少一个平台账号");
     }
     const result = await apiPost("identities", payload);
-    await loadIdentities();
+    await Promise.all([loadIdentities(), load()]);
     resetIdentityEditor();
     if (result?.initial_prior?.requested === true && result.initial_prior.applied !== true) {
       const errorCode = result.initial_prior.error || "INITIAL_PRIOR_REJECTED";
-      toast(`账号归属已保存，但初始关系未应用（${errorCode}）`, true);
+      if (errorCode === "RELATIONSHIP_ALREADY_ACTIVE") {
+        toast("账号归属已保存；该关系已有互动，已保留现有关系");
+      } else if (errorCode === "INITIAL_PRIOR_ALREADY_APPLIED") {
+        toast("账号归属已保存；初始关系此前已设置过，本次未重复应用");
+      } else {
+        toast(`账号归属已保存，但初始关系未应用（${errorCode}）`, true);
+      }
     } else {
       toast(result?.initial_prior?.applied === true ? "账号归属和初始关系已保存" : "账号归属已保存");
     }
@@ -428,16 +572,67 @@ async function saveIdentity() {
   }
 }
 
-async function deleteIdentity(personId) {
+async function mergeIdentity() {
+  const source = identityMergeSource;
+  const button = $("#btn-merge-identity");
+  const targetPersonId = $("#identity-merge-target").value;
+  if (!source || !targetPersonId) return;
+  if (source.type !== "account" && button.dataset.confirmed !== "true") {
+    button.dataset.confirmed = "true";
+    button.textContent = "确认合并";
+    clearTimeout(identityMergeConfirmTimer);
+    identityMergeConfirmTimer = setTimeout(() => {
+      resetIdentityMergeConfirmation();
+      toast("合并确认已取消，请重新选择");
+    }, 8000);
+    toast("请在 8 秒内再次点击“确认合并”；来源身份将不再单独保留");
+    return;
+  }
+
+  clearTimeout(identityMergeConfirmTimer);
+  identityMergeConfirmTimer = null;
+  button.disabled = true;
+  button.textContent = "合并中…";
+  try {
+    const payload = { target_person_id: targetPersonId };
+    if (source.type === "account") {
+      const account = collectIdentity().accounts[0];
+      if (!account?.platform_id || !account?.user_id) {
+        throw new Error("请先确认平台 ID 和 UID");
+      }
+      payload.account = account;
+    } else {
+      payload.source_person_id = source.source_person_id;
+    }
+    const result = await apiPost("identity-merge", payload);
+    await Promise.all([loadIdentities(), load()]);
+    resetIdentityEditor();
+    const subject = result?.source_kind === "account" ? "账号" : "身份";
+    toast(result?.state_merged
+      ? `${subject}及已有关系已合并`
+      : `${subject}已合并；没有发现需迁移的独立关系状态`);
+  } catch (error) {
+    toast(`合并失败：${error?.message || String(error)}`, true);
+    button.disabled = false;
+    button.dataset.confirmed = "";
+    button.textContent = source.type === "account" ? "合并账号" : "合并身份";
+  }
+}
+
+async function deleteIdentity(personId, button) {
   const person = identities.find((item) => item.person_id === personId);
-  if (!person || !window.confirm(`删除“${person.display_name}”的账号归属？关系和记忆数据不会被删除。`)) return;
+  if (!person) return;
+  button.disabled = true;
+  button.textContent = "删除中…";
+  clearDeleteConfirmation(false);
   try {
     await apiPost("identity-delete", { person_id: personId });
-    await loadIdentities();
+    await Promise.all([loadIdentities(), load()]);
     resetIdentityEditor();
-    toast("账号归属已删除");
+    toast("账号归属已删除；关系和记忆原始数据仍保留");
   } catch (error) {
     toast(`删除失败：${error?.message || String(error)}`, true);
+    renderIdentityList();
   }
 }
 
@@ -449,6 +644,8 @@ function initIdentityEditor() {
     $("#account-list").insertAdjacentHTML("beforeend", accountRow());
   });
   $("#btn-save-person").addEventListener("click", saveIdentity);
+  $("#btn-merge-identity").addEventListener("click", mergeIdentity);
+  $("#identity-merge-target").addEventListener("change", resetIdentityMergeConfirmation);
   $("#account-list").addEventListener("click", (event) => {
     const button = event.target.closest(".remove-account");
     if (button) button.closest(".account-row")?.remove();
@@ -458,8 +655,18 @@ function initIdentityEditor() {
     const action = event.target.closest("[data-action]")?.dataset.action;
     if (!item || !action) return;
     const person = identities.find((value) => value.person_id === item.dataset.personId);
-    if (action === "edit" && person) editIdentity(person);
-    if (action === "delete") deleteIdentity(item.dataset.personId);
+    if (action === "edit" && person) {
+      clearDeleteConfirmation();
+      editIdentity(person);
+    }
+    if (action === "merge" && person) {
+      clearDeleteConfirmation();
+      editIdentity(person);
+      showIdentityMerge({ type: "person", source_person_id: person.person_id });
+      document.querySelector(".identity-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    if (action === "delete") armDeleteIdentity(item.dataset.personId);
+    if (action === "confirm-delete") deleteIdentity(item.dataset.personId, event.target.closest("button"));
   });
 }
 

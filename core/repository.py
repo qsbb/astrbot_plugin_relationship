@@ -26,6 +26,9 @@ SCHEMA_VERSION = 4
 
 
 class RelationshipRepository(Protocol):
+    @property
+    def write_blocked(self) -> bool: ...
+
     def load_all(self) -> dict[str, UserRelationState]: ...
 
     def load_events(self) -> list[RelationshipEventRecord]: ...
@@ -41,6 +44,10 @@ class MemoryRepository:
     def __init__(self) -> None:
         self._data: dict[str, UserRelationState] = {}
         self._events: list[RelationshipEventRecord] = []
+
+    @property
+    def write_blocked(self) -> bool:
+        return False
 
     def load_all(self) -> dict[str, UserRelationState]:
         return {
@@ -184,6 +191,10 @@ class JsonRepository:
     @property
     def path(self) -> Path:
         return self._path
+
+    @property
+    def write_blocked(self) -> bool:
+        return self._write_blocked
 
     def _load_payload(self) -> dict[str, object]:
         if not self._path.exists():

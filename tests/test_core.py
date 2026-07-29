@@ -429,6 +429,7 @@ class RepositoryTest(unittest.TestCase):
             )
             repo = JsonRepository(path)
             self.assertEqual(repo.load_all(), {})
+            self.assertTrue(repo.write_blocked)
             with self.assertRaises(OSError):
                 repo.save_all({"bot:user:u1": UserRelationState()})
             self.assertEqual(
@@ -446,6 +447,7 @@ class RepositoryTest(unittest.TestCase):
 
             repo = JsonRepository(path)
             self.assertEqual(repo.load_all(), {})
+            self.assertTrue(repo.write_blocked)
             with self.assertRaises(OSError):
                 repo.save_all({"bot:user:u1": UserRelationState()})
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), original)
@@ -511,6 +513,88 @@ class ManagerTest(unittest.TestCase):
         self.assertGreater(updated.interaction_count, interaction_count)
         self.assertNotIn(aliases[0], mgr._states)
         self.assertNotIn(aliases[1], mgr._states)
+
+    def test_explicit_identity_merge_combines_person_and_account_states(self) -> None:
+        mgr = self._manager()
+        target = "persona:default:person:summer"
+        source = "persona:default:person:work-account"
+        account = "persona:default:account:bot:user:u2"
+        mgr._states[target] = UserRelationState(
+            affinity_score=60.0,
+            daily_affinity_positive_used=1.5,
+            daily_affinity_negative_used=0.25,
+            daily_anchor_day="1970-01-01",
+            interaction_count=10,
+            last_event_at=1000.0,
+            extra={"trusted_semantic_evidence_mass": 3.0},
+        )
+        mgr._states[source] = UserRelationState(
+            affinity_score=40.0,
+            daily_affinity_positive_used=0.5,
+            daily_affinity_negative_used=0.75,
+            daily_anchor_day="1970-01-01",
+            interaction_count=2,
+            last_event_at=900.0,
+            extra={"trusted_semantic_evidence_mass": 2.0},
+        )
+        mgr._states[account] = UserRelationState(
+            affinity_score=50.0,
+            interaction_count=3,
+            last_event_at=950.0,
+        )
+
+        changed = _run(mgr.merge_identity_states(((target, (source, account)),)))
+
+        self.assertEqual(changed, (target,))
+        self.assertEqual(mgr._states[target].interaction_count, 15)
+        self.assertAlmostEqual(mgr._states[target].affinity_score, 55.3333333333)
+        self.assertEqual(mgr._states[target].daily_affinity_positive_used, 2.0)
+        self.assertEqual(mgr._states[target].daily_affinity_negative_used, 1.0)
+        self.assertEqual(
+            mgr._states[target].extra["trusted_semantic_evidence_mass"], 5.0
+        )
+        self.assertNotIn(source, mgr._states)
+        self.assertNotIn(account, mgr._states)
+
+    def test_normal_binding_keeps_existing_canonical_state_authoritative(self) -> None:
+        mgr = self._manager()
+        target = "persona:default:person:summer"
+        account = "persona:default:account:bot:user:u2"
+        mgr._states[target] = UserRelationState(
+            affinity_score=65.0,
+            interaction_count=10,
+            last_event_at=1000.0,
+        )
+        mgr._states[account] = UserRelationState(
+            affinity_score=10.0,
+            interaction_count=5,
+            last_event_at=900.0,
+        )
+
+        self.assertTrue(_run(mgr.bind_identity(target, (account,))))
+
+        self.assertEqual(mgr._states[target].interaction_count, 10)
+        self.assertEqual(mgr._states[target].affinity_score, 65.0)
+        self.assertNotIn(account, mgr._states)
+
+    def test_explicit_merge_counts_identical_independent_person_states(self) -> None:
+        mgr = self._manager()
+        target = "persona:default:person:summer"
+        source = "persona:default:person:work-account"
+        state = UserRelationState(
+            affinity_score=55.0,
+            interaction_count=4,
+            last_event_at=1000.0,
+        )
+        mgr._states[target] = UserRelationState.from_dict(state.as_dict())
+        mgr._states[source] = UserRelationState.from_dict(state.as_dict())
+
+        self.assertEqual(
+            _run(mgr.merge_identity_states(((target, (source,)),))), (target,)
+        )
+
+        self.assertEqual(mgr._states[target].interaction_count, 8)
+        self.assertNotIn(source, mgr._states)
 
     def test_person_id_is_used_for_affinity_whitelist(self) -> None:
         calculator = AffinityCalculator(
