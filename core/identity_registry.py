@@ -94,7 +94,11 @@ class PersonIdentity:
 
     @property
     def alias_state_keys(self) -> tuple[str, ...]:
-        return tuple(dict.fromkeys(account.state_key for account in self.accounts if account.state_key))
+        return tuple(
+            dict.fromkeys(
+                account.state_key for account in self.accounts if account.state_key
+            )
+        )
 
     def alias_state_keys_for(self, profile_id: str) -> tuple[str, ...]:
         return tuple(
@@ -202,6 +206,30 @@ class IdentityRegistry:
             raise ValueError("AMBIGUOUS_ACCOUNT")
         return next(iter(matches.values()), None)
 
+    def resolve_bound_session(
+        self,
+        *,
+        person_id: str,
+        session_id: str,
+    ) -> ResolvedIdentity | None:
+        """Resolve a session only when it is globally unique and owned by person_id."""
+        person_id = _clean(person_id, 64)
+        session_id = _clean(session_id, 240)
+        if not person_id or not session_id:
+            return None
+        matches = [
+            ResolvedIdentity(person=person, account=account)
+            for person in self._persons.values()
+            for account in person.accounts
+            if account.session_id == session_id
+        ]
+        if len(matches) > 1:
+            raise ValueError("AMBIGUOUS_SESSION")
+        resolved = next(iter(matches), None)
+        if resolved is None or resolved.person.person_id != person_id:
+            return None
+        return resolved
+
     def upsert(self, payload: dict[str, Any]) -> PersonIdentity:
         person_id = _clean(payload.get("person_id"), 64)
         if not person_id:
@@ -219,6 +247,7 @@ class IdentityRegistry:
 
         accounts: list[PlatformAccount] = []
         seen: set[tuple[str, str]] = set()
+        seen_sessions: set[str] = set()
         for raw in raw_accounts:
             if not isinstance(raw, dict):
                 raise ValueError("INVALID_ACCOUNT")
@@ -234,7 +263,11 @@ class IdentityRegistry:
             owner_key = (account.platform_id.casefold(), account.user_id)
             if owner_key in seen:
                 raise ValueError("DUPLICATE_ACCOUNT")
+            if account.session_id and account.session_id in seen_sessions:
+                raise ValueError("DUPLICATE_SESSION")
             seen.add(owner_key)
+            if account.session_id:
+                seen_sessions.add(account.session_id)
             accounts.append(account)
 
         for existing in self._persons.values():
@@ -246,6 +279,11 @@ class IdentityRegistry:
             }
             if occupied.intersection(seen):
                 raise ValueError("ACCOUNT_ALREADY_BOUND")
+            occupied_sessions = {
+                item.session_id for item in existing.accounts if item.session_id
+            }
+            if occupied_sessions.intersection(seen_sessions):
+                raise ValueError("SESSION_ALREADY_BOUND")
         if person_id not in self._persons and len(self._persons) >= MAX_PERSONS:
             raise ValueError("TOO_MANY_PERSONS")
 
@@ -281,20 +319,28 @@ class IdentityRegistry:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return
-        if not isinstance(payload, dict) or payload.get("schema_version") != SCHEMA_VERSION:
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != SCHEMA_VERSION
+        ):
             return
         raw_persons = payload.get("persons")
         if not isinstance(raw_persons, list):
             return
         loaded: dict[str, PersonIdentity] = {}
         occupied: set[tuple[str, str]] = set()
+        occupied_sessions: set[str] = set()
         for raw in raw_persons[:MAX_PERSONS]:
             if not isinstance(raw, dict):
                 continue
             person_id = _clean(raw.get("person_id"), 64)
             display_name = _clean(raw.get("display_name"), 80)
             raw_accounts = raw.get("accounts")
-            if not _PERSON_ID_RE.fullmatch(person_id) or not display_name or not isinstance(raw_accounts, list):
+            if (
+                not _PERSON_ID_RE.fullmatch(person_id)
+                or not display_name
+                or not isinstance(raw_accounts, list)
+            ):
                 continue
             accounts: list[PlatformAccount] = []
             for value in raw_accounts[:MAX_ACCOUNTS_PER_PERSON]:
@@ -302,9 +348,19 @@ class IdentityRegistry:
                     continue
                 account = PlatformAccount.from_dict(value)
                 key = (account.platform_id.casefold(), account.user_id)
-                if not account.platform_id or not account.user_id or key in occupied:
+                if (
+                    not account.platform_id
+                    or not account.user_id
+                    or key in occupied
+                    or (
+                        bool(account.session_id)
+                        and account.session_id in occupied_sessions
+                    )
+                ):
                     continue
                 occupied.add(key)
+                if account.session_id:
+                    occupied_sessions.add(account.session_id)
                 accounts.append(account)
             if not accounts:
                 continue

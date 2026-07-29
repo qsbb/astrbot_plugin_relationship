@@ -76,6 +76,46 @@ def test_account_cannot_belong_to_two_people(tmp_path):
         registry.upsert(duplicate)
 
 
+def test_session_cannot_be_reused_by_another_account_or_person(tmp_path):
+    registry = IdentityRegistry(tmp_path / "identities.json")
+    registry.upsert(_payload("summer"))
+
+    same_person = _payload("summer")
+    same_person["accounts"][1]["session_id"] = same_person["accounts"][0]["session_id"]
+    with pytest.raises(ValueError, match="DUPLICATE_SESSION"):
+        registry.upsert(same_person)
+
+    other = _payload("other")
+    other["display_name"] = "另一个人"
+    other["accounts"] = [
+        {
+            "platform_id": "another-platform",
+            "user_id": "another-user",
+            "bot_id": "another-bot",
+            "session_id": "qq-main:FriendMessage:10001",
+        }
+    ]
+    with pytest.raises(ValueError, match="SESSION_ALREADY_BOUND"):
+        registry.upsert(other)
+
+
+def test_resolve_bound_session_requires_global_unique_owner(tmp_path):
+    registry = IdentityRegistry(tmp_path / "identities.json")
+    registry.upsert(_payload("summer"))
+
+    resolved = registry.resolve_bound_session(
+        person_id="summer", session_id="qq-main:FriendMessage:10001"
+    )
+    assert resolved is not None
+    assert resolved.person.person_id == "summer"
+    assert (
+        registry.resolve_bound_session(
+            person_id="other", session_id="qq-main:FriendMessage:10001"
+        )
+        is None
+    )
+
+
 def test_delete_only_removes_binding_file_entry(tmp_path):
     registry = IdentityRegistry(tmp_path / "identities.json")
     registry.upsert(_payload())

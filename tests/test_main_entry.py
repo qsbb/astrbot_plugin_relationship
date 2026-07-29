@@ -229,17 +229,72 @@ class MainEntryTest(unittest.TestCase):
             self.plugin.get_relationship_snapshot("bot-1", "user-1", "group-1")
         )
         self.assertEqual(snapshot["version"], "1.0")
-        self.assertIn(snapshot["relationship_tier"], {
-            "guarded", "neutral", "familiar", "close", "inner_circle"
-        })
+        self.assertIn(
+            snapshot["relationship_tier"],
+            {"guarded", "neutral", "familiar", "close", "inner_circle"},
+        )
         self.assertEqual(
             set(snapshot),
-            {"version", "mood", "willingness", "relationship_tier", "behavior", "silence"},
+            {
+                "version",
+                "mood",
+                "willingness",
+                "relationship_tier",
+                "behavior",
+                "silence",
+            },
         )
         self.assertNotIn("affinity", snapshot)
         self.assertNotIn("trust", snapshot)
         self.assertNotIn("familiarity", snapshot)
         self.assertEqual(snapshot["behavior"]["followup"], "allow")
+
+    def test_delivery_identity_requires_exact_bound_private_session(self) -> None:
+        contract = self.plugin.delivery_identity_contract()
+        self.assertEqual(contract["name"], "relationship.delivery_identity")
+        self.assertEqual(contract["version"], "1.0")
+        self.assertFalse(contract["exposes_raw_account_ids"])
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                        "session_id": "qq-main:FriendMessage:user-1",
+                    }
+                ],
+            }
+        )
+
+        verified = _run(
+            self.plugin.resolve_delivery_identity(
+                "summer", "qq-main:FriendMessage:user-1"
+            )
+        )
+        self.assertTrue(verified["verified"])
+        self.assertIn("relationship", verified)
+        self.assertNotIn("user_id", str(verified))
+        self.assertNotIn("bot_id", str(verified))
+
+        denied = _run(
+            self.plugin.resolve_delivery_identity(
+                "summer", "qq-main:FriendMessage:someone-else"
+            )
+        )
+        self.assertFalse(denied["verified"])
+        self.assertEqual(denied["reason"], "bound_session_not_found")
+
+        for invalid_umo in (
+            "qq-main:GroupMessage:user-1",
+            "qq-main:ChannelMessage:user-1",
+            ":PrivateMessage:",
+        ):
+            denied = _run(self.plugin.resolve_delivery_identity("summer", invalid_umo))
+            self.assertFalse(denied["verified"])
+            self.assertEqual(denied["reason"], "private_session_required")
 
     def test_relationship_event_contract_records_trusted_semantics(self) -> None:
         contract = self.plugin.relationship_event_contract()
@@ -442,14 +497,10 @@ class MainEntryTest(unittest.TestCase):
             )
 
         _run(
-            self.plugin.on_llm_request(
-                FakeEvent(message_id="a"), request("persona-a")
-            )
+            self.plugin.on_llm_request(FakeEvent(message_id="a"), request("persona-a"))
         )
         _run(
-            self.plugin.on_llm_request(
-                FakeEvent(message_id="b"), request("persona-b")
-            )
+            self.plugin.on_llm_request(FakeEvent(message_id="b"), request("persona-b"))
         )
 
         state = self.plugin.manager._states[
@@ -709,9 +760,7 @@ class MainEntryTest(unittest.TestCase):
         self.assertEqual(
             second["initial_prior"]["error"], "INITIAL_PRIOR_ALREADY_APPLIED"
         )
-        state = self.plugin.manager._states[
-            "persona:persona-a:person:summer"
-        ]
+        state = self.plugin.manager._states["persona:persona-a:person:summer"]
         self.assertEqual(state.affinity_score, 64)
         self.assertEqual(state.trust_score, 60)
         self.assertEqual(state.familiarity_score, 25)
@@ -761,7 +810,9 @@ class MainEntryTest(unittest.TestCase):
         self.assertEqual(calls[0]["session_context"]["platform"], "telegram-main")
         self.assertEqual(calls[0]["session_context"]["user_id"], "tg-user")
         self.assertEqual(len(req.extra_user_content_parts), 1)
-        self.assertIn("同一自然人的跨平台连续记忆", str(req.extra_user_content_parts[0]))
+        self.assertIn(
+            "同一自然人的跨平台连续记忆", str(req.extra_user_content_parts[0])
+        )
         self.assertIn("旅行计划", str(req.extra_user_content_parts[0]))
         context = main.ensure_context(event)
         artifact = context["artifacts"]["relationship"]["cross_platform_memory"]
@@ -852,9 +903,7 @@ class MainEntryTest(unittest.TestCase):
         payload = _run(self.plugin._page_delete_identity())
         self.assertTrue(payload["success"])
         self.assertIsNone(self.plugin.identity_registry.get("summer"))
-        self.assertIn(
-            "persona:default:person:summer", self.plugin.manager._states
-        )
+        self.assertIn("persona:default:person:summer", self.plugin.manager._states)
 
     # -- Plugin Page 配置 API ------------------------------------------
 
@@ -885,9 +934,7 @@ class MainEntryTest(unittest.TestCase):
 
         self.assertTrue(payload["success"])
         self.assertFalse(payload["restart_required"])
-        self.assertFalse(
-            (Path(self._tmp.name) / main._CONFIG_STORE_NAME).exists()
-        )
+        self.assertFalse((Path(self._tmp.name) / main._CONFIG_STORE_NAME).exists())
 
     def test_page_save_config_rejects_unknown_field(self) -> None:
         payload = self._save_config({"UNKNOWN_KEY": 1})

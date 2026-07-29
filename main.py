@@ -87,7 +87,7 @@ from .core.request_context import (
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 
@@ -98,6 +98,11 @@ RELATIONSHIP_SNAPSHOT_CONTRACT_NAME = "relationship.snapshot"
 RELATIONSHIP_SNAPSHOT_CONTRACT_VERSION = "1.0"
 RELATIONSHIP_EVENT_CONTRACT_NAME = "relationship.event"
 RELATIONSHIP_EVENT_CONTRACT_VERSION = "1.0"
+DELIVERY_IDENTITY_CONTRACT_NAME = "relationship.delivery_identity"
+DELIVERY_IDENTITY_CONTRACT_VERSION = "1.0"
+_PRIVATE_UMO_MESSAGE_TYPES = frozenset(
+    {"friendmessage", "privatemessage", "directmessage"}
+)
 _PUBLIC_EVENT_SOURCES = frozenset({SOURCE_DIRECT, SOURCE_RULE, SOURCE_VERIFIED})
 _PUBLIC_EVENT_KINDS = tuple(sorted(SEMANTIC_KINDS - {KIND_INITIAL_PRIOR}))
 
@@ -213,6 +218,85 @@ class RelationshipPlugin(Star):
             "stores_message_text": False,
         }
 
+    def delivery_identity_contract(self) -> dict[str, object]:
+        """Declare strict person-to-private-session verification for delivery."""
+        return {
+            "name": DELIVERY_IDENTITY_CONTRACT_NAME,
+            "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+            "plugin": PLUGIN_NAME,
+            "capabilities": ("verify_bound_session", "read_derived_relationship"),
+            "permission_identity_mode": "raw_platform_account",
+            "exposes_raw_account_ids": False,
+        }
+
+    async def resolve_delivery_identity(
+        self, person_id: str, recipient_umo: str
+    ) -> dict[str, object]:
+        """Verify an exact bound UMO and return only derived relationship advice."""
+        person_id = str(person_id or "").strip()
+        recipient_umo = str(recipient_umo or "").strip()
+        if not person_id or not recipient_umo:
+            return {
+                "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+                "verified": False,
+                "reason": "identity_scope_required",
+            }
+        parts = recipient_umo.split(":", 2)
+        if (
+            len(parts) != 3
+            or not all(part.strip() for part in parts)
+            or parts[1].casefold() not in _PRIVATE_UMO_MESSAGE_TYPES
+        ):
+            return {
+                "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+                "verified": False,
+                "reason": "private_session_required",
+            }
+        if self.identity_registry.get(person_id) is None:
+            return {
+                "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+                "verified": False,
+                "reason": "person_not_found",
+            }
+        try:
+            resolved = self.identity_registry.resolve_bound_session(
+                person_id=person_id,
+                session_id=recipient_umo,
+            )
+        except ValueError:
+            return {
+                "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+                "verified": False,
+                "reason": "bound_session_ambiguous",
+            }
+        if resolved is None:
+            return {
+                "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+                "verified": False,
+                "reason": "bound_session_not_found",
+            }
+        person = resolved.person
+        account = resolved.account
+        if not account.bot_id or not account.user_id:
+            return {
+                "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+                "verified": False,
+                "reason": "bound_account_incomplete",
+            }
+        profile_id = self._account_memory_profile(account)
+        snapshot = await self.get_relationship_snapshot(
+            account.bot_id,
+            account.user_id,
+            relationship_profile_id=profile_id,
+            person_id=person.person_id,
+        )
+        return {
+            "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+            "verified": True,
+            "reason": "bound_session_verified",
+            "relationship": snapshot,
+        }
+
     async def get_relationship_snapshot(
         self,
         bot_id: str,
@@ -324,7 +408,9 @@ class RelationshipPlugin(Star):
         interaction = InteractionEvent(
             bot_id=bot_id,
             user_id=user_id,
-            group_id=(str(payload.get("group_id")) if payload.get("group_id") else None),
+            group_id=(
+                str(payload.get("group_id")) if payload.get("group_id") else None
+            ),
             text="",
             timestamp=timestamp,
             kind=kind,
@@ -347,9 +433,7 @@ class RelationshipPlugin(Star):
     def _snapshot_payload(self, snapshot: Any) -> dict[str, object]:
         """把内部状态压缩成可写入请求上下文的派生字段。"""
         behavior = snapshot.behavior
-        silence_suggested = bool(
-            behavior.silence_suggested or snapshot.should_silence
-        )
+        silence_suggested = bool(behavior.silence_suggested or snapshot.should_silence)
         return {
             "version": RELATIONSHIP_SNAPSHOT_CONTRACT_VERSION,
             "mood": snapshot.mood,
@@ -804,7 +888,9 @@ class RelationshipPlugin(Star):
                 "trust_gate": self._affinity_config.whitelist_trust_gate,
                 "familiarity_gate": self._affinity_config.whitelist_familiarity_gate,
                 "whitelist_count": len(whitelist),
-                "profile_count": len({item["relationship_profile_id"] for item in users}),
+                "profile_count": len(
+                    {item["relationship_profile_id"] for item in users}
+                ),
             },
             "summary": {
                 "user_count": len(users),
@@ -1048,9 +1134,7 @@ class RelationshipPlugin(Star):
     async def _page_delete_identity(self):
         data = await self._request_json()
         person_id = (
-            str(data.get("person_id") or "").strip()
-            if isinstance(data, dict)
-            else ""
+            str(data.get("person_id") or "").strip() if isinstance(data, dict) else ""
         )
         if not person_id:
             payload = {"success": False, "error": "PERSON_ID_REQUIRED"}
@@ -1377,9 +1461,7 @@ class RelationshipPlugin(Star):
             values.append(umo.split(":", 1)[0])
         return tuple(dict.fromkeys(value for value in values if value))
 
-    def _resolve_identity(
-        self, event: AstrMessageEvent
-    ) -> ResolvedIdentity | None:
+    def _resolve_identity(self, event: AstrMessageEvent) -> ResolvedIdentity | None:
         return self.identity_registry.resolve(
             platform_candidates=self._platform_candidates(event),
             user_id=self._safe_event_id(event, "get_sender_id"),

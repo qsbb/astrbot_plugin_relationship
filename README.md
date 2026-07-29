@@ -97,6 +97,18 @@ snapshot = await plugin.get_relationship_snapshot(
 熟悉度原始分数。兼容的言插件会优先从 `ningxin.request_context` 1.0 读取同轮快照，
 并把情登记的关系表达片段与序、知的片段稳定排序和去重；未安装言时情仍直接注入表达约束。
 
+需要向一个已绑定自然人的明确私聊会话交付内容时，可使用严格的身份校验契约：
+
+```python
+contract = plugin.delivery_identity_contract()
+result = await plugin.resolve_delivery_identity(
+    person_id="summer",
+    recipient_umo="aiocqhttp:FriendMessage:123456",
+)
+```
+
+契约名为 `relationship.delivery_identity`、版本为 `1.0`。它要求 `recipient_umo` 与账号归属中填写的 UMO 完全一致、消息类型明确为 `FriendMessage`、`PrivateMessage` 或 `DirectMessage`，且对应账号同时具备 Bot ID 与 UID。非空 UMO 在整个自然人注册表中必须唯一，契约也会全局复核它只属于指定自然人。验证成功后只返回 `relationship.snapshot@1` 的派生关系档位、语气、篇幅、主动性和静默建议，不返回 UID、Bot ID、显示名或原始好感/信任/熟悉度。该契约只证明“这个会话属于这个自然人”，不授予发送权限；是否为主人私聊仍由序单独授权，最终是否发送由言决定。
+
 可信工作流可以通过写入契约提交已经确认的语义事实；平台聊天原文不能直接自证这些事件：
 
 ```python
