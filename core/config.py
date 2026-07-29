@@ -50,6 +50,9 @@ DEFAULTS: dict[str, Any] = {
     "POLICY_ENABLE_PROMPT_FRAGMENT": True,
     "POLICY_ENABLE_STYLE_HINT": True,
     "PROMPT_INJECT_ENABLED": True,
+    "CROSS_PLATFORM_MEMORY_ENABLED": True,
+    "CROSS_PLATFORM_MEMORY_TOP_K": 3,
+    "CROSS_PLATFORM_MEMORY_MAX_CHARS": 1200,
     "SAVE_INTERVAL_SECONDS": 30.0,
     "LOG_LEVEL": "INFO",
 }
@@ -226,6 +229,20 @@ def policy_config(raw: Mapping[str, Any]) -> PolicyConfig:
 
 def prompt_config(raw: Mapping[str, Any]) -> PromptConfig:
     return PromptConfig(inject_enabled=_get_bool(raw, "PROMPT_INJECT_ENABLED"))
+
+
+def cross_platform_memory_enabled(raw: Mapping[str, Any]) -> bool:
+    return _get_bool(raw, "CROSS_PLATFORM_MEMORY_ENABLED")
+
+
+def cross_platform_memory_top_k(raw: Mapping[str, Any]) -> int:
+    return _get_int(raw, "CROSS_PLATFORM_MEMORY_TOP_K", minimum=1, maximum=10)
+
+
+def cross_platform_memory_max_chars(raw: Mapping[str, Any]) -> int:
+    return _get_int(
+        raw, "CROSS_PLATFORM_MEMORY_MAX_CHARS", minimum=200, maximum=8000
+    )
 
 
 def mood_enabled(raw: Mapping[str, Any]) -> bool:

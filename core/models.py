@@ -68,9 +68,13 @@ class RelationshipScope:
     bot_id: str
     user_id: str
     group_id: str | None = None
+    person_id: str = ""
+    state_alias_keys: tuple[str, ...] = ()
 
     @property
     def user_key(self) -> str:
+        if self.person_id:
+            return f"person:user:{self.person_id}"
         return f"{self.bot_id}:user:{self.user_id}"
 
     @property
@@ -109,10 +113,22 @@ class InteractionEvent:
     severity: float = 1.0
     dedupe_key: str = ""
     evidence_refs: tuple[str, ...] = ()
+    person_id: str = ""
+    state_alias_keys: tuple[str, ...] = ()
 
     @property
     def scope(self) -> RelationshipScope:
-        return RelationshipScope(self.bot_id, self.user_id, self.group_id)
+        return RelationshipScope(
+            self.bot_id,
+            self.user_id,
+            self.group_id,
+            self.person_id,
+            self.state_alias_keys,
+        )
+
+    @property
+    def relationship_user_id(self) -> str:
+        return self.person_id or self.user_id
 
     @property
     def is_command(self) -> bool:

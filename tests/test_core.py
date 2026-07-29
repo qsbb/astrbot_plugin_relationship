@@ -462,6 +462,54 @@ class ManagerTest(unittest.TestCase):
         self.assertEqual(snap.mood, MOOD_NORMAL)
         self.assertIsInstance(snap.prompt_fragment, str)
 
+    def test_bound_accounts_share_and_mirror_long_term_state(self) -> None:
+        mgr = self._manager()
+        _run(mgr.record(_event(user_id="u1", event_id="u1-first")))
+        _run(mgr.record(_event(user_id="u2", event_id="u2-first", ts=1200.0)))
+        aliases = ("bot:user:u1", "bot:user:u2")
+
+        self.assertTrue(_run(mgr.bind_identity("person:user:summer", aliases)))
+
+        canonical = mgr._states["person:user:summer"]
+        self.assertEqual(mgr._states[aliases[0]].as_dict(), canonical.as_dict())
+        self.assertEqual(mgr._states[aliases[1]].as_dict(), canonical.as_dict())
+
+        _run(
+            mgr.record(
+                _event(
+                    user_id="u1",
+                    event_id="u1-linked",
+                    ts=1400.0,
+                    person_id="summer",
+                    state_alias_keys=aliases,
+                )
+            )
+        )
+        updated = mgr._states["person:user:summer"]
+        self.assertEqual(mgr._states[aliases[0]].as_dict(), updated.as_dict())
+        self.assertEqual(mgr._states[aliases[1]].as_dict(), updated.as_dict())
+
+    def test_person_id_is_used_for_affinity_whitelist(self) -> None:
+        calculator = AffinityCalculator(
+            AffinityConfig(
+                praise_gain=2.0,
+                whitelist_user_ids=("summer",),
+                non_whitelist_ceiling=50.0,
+            )
+        )
+        state = models.UserRelationState()
+
+        delta = calculator.compute(
+            _event(
+                user_id="raw-platform-id",
+                person_id="summer",
+                kind=models.KIND_PRAISE,
+            ),
+            state,
+        )
+
+        self.assertGreater(delta.affinity, 0.0)
+
     def test_daily_affinity_cap(self) -> None:
         mgr = self._manager(
             affinity=AffinityCalculator(AffinityConfig(praise_gain=2.0, daily_cap=5.0))

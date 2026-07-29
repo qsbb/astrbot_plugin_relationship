@@ -21,6 +21,7 @@
 
     <nav class="tabs" aria-label="关系页面分区">
       <button class="active" type="button" data-tab="overview">关系总览</button>
+      <button type="button" data-tab="identities">账号归属</button>
       <button type="button" data-tab="settings">设置</button>
     </nav>
 
@@ -78,6 +79,38 @@
           </table>
         </div>
       </article>
+    </section>
+
+    <section class="panel" data-panel="identities">
+      <div class="identity-grid">
+        <article class="card">
+          <div class="section-heading">
+            <div>
+              <h2>自然人身份</h2>
+              <p id="memory-bridge-status">检测记忆插件中…</p>
+            </div>
+            <button id="btn-new-person" type="button" class="icon-command" title="新建自然人" aria-label="新建自然人">+</button>
+          </div>
+          <div id="identity-list" class="identity-list"><p class="config-loading">加载账号归属中…</p></div>
+        </article>
+
+        <article class="card identity-editor">
+          <div class="section-heading">
+            <div><h2 id="identity-editor-title">新建自然人</h2></div>
+            <button id="btn-cancel-person" type="button">清空</button>
+          </div>
+          <div class="identity-fields">
+            <label>显示名称<input id="person-display-name" type="text" maxlength="80" autocomplete="off" /></label>
+            <label>内部 ID<input id="person-id" type="text" maxlength="64" placeholder="留空自动生成" autocomplete="off" /></label>
+          </div>
+          <div class="account-heading">
+            <h3>平台账号</h3>
+            <button id="btn-add-account" type="button" class="icon-command" title="添加平台账号" aria-label="添加平台账号">+</button>
+          </div>
+          <div id="account-list" class="account-list"></div>
+          <button id="btn-save-person" type="button" class="primary identity-save">保存账号归属</button>
+        </article>
+      </div>
     </section>
 
     <section class="panel" data-panel="settings">

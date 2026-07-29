@@ -15,6 +15,7 @@ const CONFIG_GROUPS = [
 
 let configSchema = {};
 let configValues = {};
+let identities = [];
 
 function $(selector) {
   return document.querySelector(selector);
@@ -112,7 +113,9 @@ function render(payload) {
   }
 
   tbody.innerHTML = users.map((user) => (
-    `<tr><td>${escapeHtml(user.user_id)}</td><td>${escapeHtml(user.band)}</td>`
+    `<tr><td>${escapeHtml(user.display_name || user.user_id)}`
+    + `${user.display_name ? `<small class="user-id">${escapeHtml(user.user_id)} · ${user.linked_accounts} 个账号</small>` : ""}</td>`
+    + `<td>${escapeHtml(user.band)}</td>`
     + `<td>${user.affinity}</td><td>${user.trust}</td><td>${user.familiarity}</td><td>${user.interaction_count}</td>`
     + `<td>${user.whitelisted ? '<span class="badge ok">白名单</span>' : '<span class="badge">普通</span>'}</td>`
     + `<td>${user.boundary === "开放" ? '<span class="badge safe">开放</span>' : '<span class="badge warn">谨慎</span>'}</td>`
@@ -241,6 +244,130 @@ function resetConfigForm() {
   toast("已重置为当前生效配置");
 }
 
+function accountRow(account = {}) {
+  return `<div class="account-row">`
+    + `<label>平台 ID<input data-account="platform_id" type="text" maxlength="120" value="${escapeHtml(account.platform_id || "")}" /></label>`
+    + `<label>UID<input data-account="user_id" type="text" maxlength="120" value="${escapeHtml(account.user_id || "")}" /></label>`
+    + `<label>Bot ID<input data-account="bot_id" type="text" maxlength="120" value="${escapeHtml(account.bot_id || "")}" /></label>`
+    + `<label>UMO<input data-account="session_id" type="text" maxlength="240" value="${escapeHtml(account.session_id || "")}" /></label>`
+    + `<label>备注<input data-account="label" type="text" maxlength="80" value="${escapeHtml(account.label || "")}" /></label>`
+    + `<button type="button" class="remove-account icon-command danger-command" title="移除账号" aria-label="移除账号">×</button>`
+    + `</div>`;
+}
+
+function resetIdentityEditor(accountCount = 2) {
+  $("#identity-editor-title").textContent = "新建自然人";
+  $("#person-display-name").value = "";
+  $("#person-id").value = "";
+  $("#person-id").readOnly = false;
+  $("#account-list").innerHTML = Array.from({ length: accountCount }, () => accountRow()).join("");
+}
+
+function editIdentity(person) {
+  $("#identity-editor-title").textContent = "编辑账号归属";
+  $("#person-display-name").value = person.display_name || "";
+  $("#person-id").value = person.person_id || "";
+  $("#person-id").readOnly = true;
+  $("#account-list").innerHTML = (person.accounts || []).map(accountRow).join("") || accountRow();
+}
+
+function renderIdentities(payload) {
+  identities = payload?.persons || [];
+  const bridgeAvailable = payload?.memory_companion?.available === true;
+  $("#memory-bridge-status").textContent = bridgeAvailable
+    ? "Memory Companion 已就绪"
+    : "Memory Companion 未就绪，关系仍会跨平台共享";
+  const list = $("#identity-list");
+  if (!identities.length) {
+    list.innerHTML = '<p class="config-loading">暂无自然人身份</p>';
+    return;
+  }
+  list.innerHTML = identities.map((person) => (
+    `<div class="identity-item" data-person-id="${escapeHtml(person.person_id)}">`
+    + `<div><strong>${escapeHtml(person.display_name)}</strong><span>${escapeHtml(person.person_id)}</span></div>`
+    + `<span class="account-count">${(person.accounts || []).length} 个账号</span>`
+    + `<div class="identity-actions"><button type="button" data-action="edit">编辑</button>`
+    + `<button type="button" data-action="delete" class="danger-command">删除</button></div></div>`
+  )).join("");
+}
+
+async function loadIdentities() {
+  try {
+    renderIdentities(await apiGet("identities"));
+  } catch (error) {
+    $("#identity-list").innerHTML = `<p class="config-loading">加载失败：${escapeHtml(error?.message || String(error))}</p>`;
+  }
+}
+
+function collectIdentity() {
+  const accounts = [...document.querySelectorAll("#account-list .account-row")].map((row) => {
+    const account = {};
+    row.querySelectorAll("[data-account]").forEach((input) => {
+      account[input.dataset.account] = input.value.trim();
+    });
+    return account;
+  }).filter((account) => account.platform_id || account.user_id);
+  return {
+    person_id: $("#person-id").value.trim(),
+    display_name: $("#person-display-name").value.trim(),
+    accounts,
+  };
+}
+
+async function saveIdentity() {
+  const button = $("#btn-save-person");
+  button.disabled = true;
+  try {
+    const payload = collectIdentity();
+    if (!payload.display_name || !payload.accounts.length) {
+      throw new Error("请填写显示名称和至少一个平台账号");
+    }
+    await apiPost("identities", payload);
+    await loadIdentities();
+    resetIdentityEditor();
+    toast("账号归属已保存");
+  } catch (error) {
+    toast(`保存失败：${error?.message || String(error)}`, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function deleteIdentity(personId) {
+  const person = identities.find((item) => item.person_id === personId);
+  if (!person || !window.confirm(`删除“${person.display_name}”的账号归属？关系和记忆数据不会被删除。`)) return;
+  try {
+    await apiPost("identity-delete", { person_id: personId });
+    await loadIdentities();
+    resetIdentityEditor();
+    toast("账号归属已删除");
+  } catch (error) {
+    toast(`删除失败：${error?.message || String(error)}`, true);
+  }
+}
+
+function initIdentityEditor() {
+  resetIdentityEditor();
+  $("#btn-new-person").addEventListener("click", () => resetIdentityEditor());
+  $("#btn-cancel-person").addEventListener("click", () => resetIdentityEditor());
+  $("#btn-add-account").addEventListener("click", () => {
+    $("#account-list").insertAdjacentHTML("beforeend", accountRow());
+  });
+  $("#btn-save-person").addEventListener("click", saveIdentity);
+  $("#account-list").addEventListener("click", (event) => {
+    const button = event.target.closest(".remove-account");
+    if (button) button.closest(".account-row")?.remove();
+  });
+  $("#identity-list").addEventListener("click", (event) => {
+    const item = event.target.closest("[data-person-id]");
+    const action = event.target.closest("[data-action]")?.dataset.action;
+    if (!item || !action) return;
+    const person = identities.find((value) => value.person_id === item.dataset.personId);
+    if (action === "edit" && person) editIdentity(person);
+    if (action === "delete") deleteIdentity(item.dataset.personId);
+  });
+}
+
 function initTabs() {
   document.querySelectorAll(".tabs button[data-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -261,11 +388,13 @@ async function init() {
     throw new Error("AstrBot 页面通信接口不可用");
   }
   initTabs();
+  initIdentityEditor();
   $("#btn-refresh").addEventListener("click", load);
   $("#btn-save-config").addEventListener("click", saveConfig);
   $("#btn-reset-config").addEventListener("click", resetConfigForm);
   await load();
   await loadConfig();
+  await loadIdentities();
 }
 
 init().catch((error) => {

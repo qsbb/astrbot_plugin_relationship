@@ -23,6 +23,13 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn('data-tab="settings"', self.html)
         self.assertIn('data-panel="settings"', self.html)
 
+    def test_html_has_identity_binding_tab(self) -> None:
+        self.assertIn('data-tab="identities"', self.html)
+        self.assertIn('data-panel="identities"', self.html)
+        self.assertIn('id="identity-list"', self.html)
+        self.assertIn('class="card identity-editor"', self.html)
+        self.assertIn('id="account-list"', self.html)
+
     def test_html_has_config_form_container(self) -> None:
         self.assertIn('id="config-form"', self.html)
         self.assertIn('id="btn-save-config"', self.html)
@@ -36,6 +43,12 @@ class PagesUiTest(unittest.TestCase):
 
     def test_js_has_api_post(self) -> None:
         self.assertIn("async function apiPost(", self.js)
+
+    def test_js_has_identity_crud(self) -> None:
+        self.assertIn("async function loadIdentities()", self.js)
+        self.assertIn("async function saveIdentity()", self.js)
+        self.assertIn("async function deleteIdentity(", self.js)
+        self.assertIn("function collectIdentity()", self.js)
 
     def test_js_has_tab_switching(self) -> None:
         self.assertIn("function initTabs()", self.js)
@@ -55,6 +68,11 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn(".config-group", self.css)
         self.assertIn(".config-hint", self.css)
         self.assertIn("button.primary", self.css)
+
+    def test_css_has_identity_editor_styles(self) -> None:
+        self.assertIn(".identity-grid", self.css)
+        self.assertIn(".account-row", self.css)
+        self.assertIn(".identity-item", self.css)
 
 
 if __name__ == "__main__":

@@ -133,12 +133,19 @@ class FakeEvent:
         sender_id: str = "user-1",
         group_id: str | None = None,
         message_id: str = "msg-1",
+        platform_id: str = "qq-main",
     ) -> None:
         self._text = text
         self._bot_id = bot_id
         self._sender_id = sender_id
         self._group_id = group_id
         self._message_id = message_id
+        self._platform_id = platform_id
+        self.unified_msg_origin = (
+            f"{platform_id}:GroupMessage:{group_id}"
+            if group_id
+            else f"{platform_id}:FriendMessage:{sender_id}"
+        )
 
     def get_self_id(self) -> str:
         return self._bot_id
@@ -154,6 +161,12 @@ class FakeEvent:
 
     def get_message_id(self) -> str:
         return self._message_id
+
+    def get_platform_id(self) -> str:
+        return self._platform_id
+
+    def get_platform_name(self) -> str:
+        return self._platform_id
 
     @staticmethod
     def plain_result(text: str) -> str:
@@ -203,6 +216,8 @@ class MainEntryTest(unittest.TestCase):
         routes = [call[0] for call in self.context.web_api_calls]
         self.assertIn(f"/{main.PLUGIN_NAME}/overview", routes)
         self.assertIn(f"/{main.PLUGIN_NAME}/config", routes)
+        self.assertIn(f"/{main.PLUGIN_NAME}/identities", routes)
+        self.assertIn(f"/{main.PLUGIN_NAME}/identity-delete", routes)
 
     def test_relationship_snapshot_contract_is_versioned_and_privacy_limited(self):
         contract = self.plugin.relationship_snapshot_contract()
@@ -309,6 +324,162 @@ class MainEntryTest(unittest.TestCase):
         self.assertEqual(payload["summary"]["user_count"], 1)
         self.assertEqual(payload["users"][0]["user_id"], "user-1")
         self.assertIn(payload["users"][0]["boundary"], ("开放", "谨慎"))
+
+    def _save_identity(self, body: dict) -> dict:
+        async def fake_request_json():
+            return body
+
+        self.plugin._request_json = fake_request_json
+        return _run(self.plugin._page_save_identity())
+
+    def test_identity_binding_shares_relationship_state_between_platforms(self) -> None:
+        payload = self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                    },
+                    {
+                        "platform_id": "telegram-main",
+                        "user_id": "tg-user",
+                        "bot_id": "tg-bot",
+                    },
+                ],
+            }
+        )
+        self.assertTrue(payload["success"])
+
+        qq_event = FakeEvent(text="QQ 上聊过的事")
+        _run(self.plugin.on_llm_request(qq_event, object()))
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(
+                    text="换到 Telegram 继续",
+                    bot_id="tg-bot",
+                    sender_id="tg-user",
+                    platform_id="telegram-main",
+                    message_id="msg-2",
+                ),
+                object(),
+            )
+        )
+
+        canonical = self.plugin.manager._states["person:user:summer"]
+        self.assertEqual(canonical.interaction_count, 2)
+        self.assertEqual(
+            self.plugin.manager._states["bot-1:user:user-1"].as_dict(),
+            canonical.as_dict(),
+        )
+        self.assertEqual(
+            self.plugin.manager._states["tg-bot:user:tg-user"].as_dict(),
+            canonical.as_dict(),
+        )
+        context = main.ensure_context(qq_event)
+        identity = context["artifacts"]["relationship"]["canonical_identity"]
+        self.assertEqual(
+            identity,
+            {
+                "mapped": True,
+                "account_count": 2,
+                "permission_identity_mode": "raw_platform_account",
+            },
+        )
+
+    def test_cross_platform_memory_queries_only_other_verified_account(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                    },
+                    {
+                        "platform_id": "telegram-main",
+                        "user_id": "tg-user",
+                        "bot_id": "tg-bot",
+                        "session_id": "telegram-main:FriendMessage:tg-user",
+                    },
+                ],
+            }
+        )
+
+        calls: list[dict] = []
+
+        class Bridge:
+            @staticmethod
+            async def compose_injection(query, *, session_context, top_k, max_chars):
+                calls.append(
+                    {
+                        "query": query,
+                        "session_context": session_context,
+                        "top_k": top_k,
+                        "max_chars": max_chars,
+                    }
+                )
+                return "用户昨天在另一个平台聊过旅行计划。"
+
+        self.plugin._memory_companion_bridge = lambda: Bridge()
+        req = types.SimpleNamespace(extra_user_content_parts=[], system_prompt="")
+        event = FakeEvent(text="旅行继续聊")
+        _run(self.plugin.on_cross_platform_memory(event, req))
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["session_context"]["platform"], "telegram-main")
+        self.assertEqual(calls[0]["session_context"]["user_id"], "tg-user")
+        self.assertEqual(len(req.extra_user_content_parts), 1)
+        self.assertIn("同一自然人的跨平台连续记忆", str(req.extra_user_content_parts[0]))
+        self.assertIn("旅行计划", str(req.extra_user_content_parts[0]))
+        context = main.ensure_context(event)
+        artifact = context["artifacts"]["relationship"]["cross_platform_memory"]
+        self.assertEqual(
+            set(artifact),
+            {"queried_accounts", "injected_chars", "provider"},
+        )
+        fragments = context["artifacts"]["relationship"]["prompt_fragments"]
+        self.assertNotIn("person_id", fragments[0]["metadata"])
+
+    def test_memory_bridge_reuses_astrbot_loaded_module_instance(self) -> None:
+        bridge = object()
+        module_name = "data.plugins.astrbot_plugin_memory_companion.main"
+        loaded = types.ModuleType(module_name)
+        loaded.get_active_bridge = lambda: bridge
+        sys.modules[module_name] = loaded
+        try:
+            self.assertIs(self.plugin._memory_companion_bridge(), bridge)
+        finally:
+            sys.modules.pop(module_name, None)
+
+    def test_page_delete_identity_keeps_relationship_state(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                    }
+                ],
+            }
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(), object()))
+
+        async def fake_request_json():
+            return {"person_id": "summer"}
+
+        self.plugin._request_json = fake_request_json
+        payload = _run(self.plugin._page_delete_identity())
+        self.assertTrue(payload["success"])
+        self.assertIsNone(self.plugin.identity_registry.get("summer"))
+        self.assertIn("person:user:summer", self.plugin.manager._states)
 
     # -- Plugin Page 配置 API ------------------------------------------
 

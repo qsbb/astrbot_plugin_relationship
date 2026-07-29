@@ -117,6 +117,7 @@ class RelationshipStateManager:
             self._apply_deltas(normalized_event, state, business_now)
             state.last_event_at = max(state.last_event_at, business_now)
             state.interaction_count += 1
+            self._mirror_person_state(scope, state)
             self._dirty = True
             self._maybe_save(business_now)
             snapshot = build_snapshot(
@@ -150,8 +151,44 @@ class RelationshipStateManager:
             self._mood.reset(scope.session_key)
             self._mood.reset(scope.pressure_key)
             self._states.pop(scope.user_key, None)
+            for alias_key in scope.state_alias_keys:
+                self._states.pop(alias_key, None)
             self._dirty = True
             self._save()
+
+    async def bind_identity(
+        self, relationship_key: str, alias_state_keys: tuple[str, ...]
+    ) -> bool:
+        """Merge existing account states into one person and mirror it to aliases."""
+        relationship_key = str(relationship_key or "").strip()
+        aliases = tuple(
+            dict.fromkeys(
+                str(value or "").strip() for value in alias_state_keys if value
+            )
+        )
+        if not relationship_key or not aliases:
+            return False
+        async with self._lock:
+            candidates: list[UserRelationState] = []
+            fingerprints: set[str] = set()
+            for key in (relationship_key, *aliases):
+                state = self._states.get(key)
+                if state is None:
+                    continue
+                fingerprint = repr(state.as_dict())
+                if fingerprint in fingerprints:
+                    continue
+                fingerprints.add(fingerprint)
+                candidates.append(state)
+            if not candidates:
+                return False
+            merged = self._merge_states(candidates)
+            self._states[relationship_key] = merged
+            for key in aliases:
+                self._states[key] = UserRelationState.from_dict(merged.as_dict())
+            self._dirty = True
+            self._save()
+            return True
 
     def update_runtime_config(
         self,
@@ -281,7 +318,51 @@ class RelationshipStateManager:
             severity=event.severity,
             dedupe_key=event.dedupe_key,
             evidence_refs=event.evidence_refs,
+            person_id=event.person_id,
+            state_alias_keys=event.state_alias_keys,
         )
+
+    def _mirror_person_state(
+        self, scope: RelationshipScope, state: UserRelationState
+    ) -> None:
+        if not scope.person_id:
+            return
+        for key in scope.state_alias_keys:
+            if key and key != scope.user_key:
+                self._states[key] = UserRelationState.from_dict(state.as_dict())
+
+    @staticmethod
+    def _merge_states(states: list[UserRelationState]) -> UserRelationState:
+        weights = [max(1, state.interaction_count) for state in states]
+        total_weight = float(sum(weights))
+
+        def weighted(field: str) -> float:
+            return sum(
+                float(getattr(state, field)) * weight
+                for state, weight in zip(states, weights)
+            ) / total_weight
+
+        latest = max(states, key=lambda state: state.last_event_at)
+        merged = UserRelationState(
+            affinity_score=weighted("affinity_score"),
+            trust_reliability=weighted("trust_reliability"),
+            trust_benevolence=weighted("trust_benevolence"),
+            trust_integrity=weighted("trust_integrity"),
+            trust_epistemic=weighted("trust_epistemic"),
+            familiarity_score=weighted("familiarity_score"),
+            daily_affinity_positive_used=max(
+                state.daily_affinity_positive_used for state in states
+            ),
+            daily_affinity_negative_used=max(
+                state.daily_affinity_negative_used for state in states
+            ),
+            daily_anchor_day=latest.daily_anchor_day,
+            interaction_count=sum(state.interaction_count for state in states),
+            last_event_at=latest.last_event_at,
+            extra=dict(latest.extra),
+        )
+        merged.refresh_trust_score()
+        return merged
 
     @staticmethod
     def _record_dedupe_aliases(record: RelationshipEventRecord) -> set[str]:

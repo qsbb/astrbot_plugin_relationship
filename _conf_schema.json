@@ -88,7 +88,7 @@
   },
   "AFFINITY_WHITELIST_USER_IDS": {
     "type": "string",
-    "description": "高好感白名单用户 ID，多个 ID 用英文逗号分隔；留空表示没有高好感白名单",
+    "description": "高好感白名单 ID，多个用英文逗号分隔；未绑定账号填平台用户 ID，账号归属后填自然人内部 person_id；留空表示没有白名单",
     "default": ""
   },
   "AFFINITY_HIGH_THRESHOLD": {
@@ -181,6 +181,25 @@
     "type": "bool",
     "description": "是否把关系表达约束注入本轮 LLM 请求（关闭后仅保留只读建议）",
     "default": true
+  },
+  "CROSS_PLATFORM_MEMORY_ENABLED": {
+    "type": "bool",
+    "description": "私聊时从已验证为同一自然人的其他平台账号读取相关 Memory Companion 记忆；不改变权限身份",
+    "default": true
+  },
+  "CROSS_PLATFORM_MEMORY_TOP_K": {
+    "type": "int",
+    "description": "每个已绑定账号最多召回的跨平台记忆数量",
+    "default": 3,
+    "minimum": 1,
+    "maximum": 10
+  },
+  "CROSS_PLATFORM_MEMORY_MAX_CHARS": {
+    "type": "int",
+    "description": "单轮跨平台补充记忆的总字符上限",
+    "default": 1200,
+    "minimum": 200,
+    "maximum": 8000
   },
   "SAVE_INTERVAL_SECONDS": {
     "type": "float",
