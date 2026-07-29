@@ -11,6 +11,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .profiles import (
+    DEFAULT_PROFILE_ID,
+    account_state_key,
+    person_state_key,
+    pressure_state_key,
+    session_state_key,
+)
+
 KIND_MESSAGE = "message"
 KIND_COMMAND = "command"
 KIND_MENTION = "mention"
@@ -19,6 +27,7 @@ KIND_OFFENSE = "offense"
 KIND_HELP_RECEIVED = "help_received"
 KIND_PROMISE_KEPT = "promise_kept"
 KIND_PROMISE_BROKEN = "promise_broken"
+KIND_INITIAL_PRIOR = "initial_prior"
 KIND_RESET = "reset"
 
 KNOWN_KINDS = frozenset(
@@ -31,6 +40,7 @@ KNOWN_KINDS = frozenset(
         KIND_HELP_RECEIVED,
         KIND_PROMISE_KEPT,
         KIND_PROMISE_BROKEN,
+        KIND_INITIAL_PRIOR,
         KIND_RESET,
     }
 )
@@ -41,6 +51,7 @@ SEMANTIC_KINDS = frozenset(
         KIND_HELP_RECEIVED,
         KIND_PROMISE_KEPT,
         KIND_PROMISE_BROKEN,
+        KIND_INITIAL_PRIOR,
     }
 )
 
@@ -70,23 +81,29 @@ class RelationshipScope:
     group_id: str | None = None
     person_id: str = ""
     state_alias_keys: tuple[str, ...] = ()
+    relationship_profile_id: str = DEFAULT_PROFILE_ID
 
     @property
     def user_key(self) -> str:
         if self.person_id:
-            return f"person:user:{self.person_id}"
-        return f"{self.bot_id}:user:{self.user_id}"
+            return person_state_key(self.relationship_profile_id, self.person_id)
+        return account_state_key(
+            self.relationship_profile_id, self.bot_id, self.user_id
+        )
 
     @property
     def session_key(self) -> str:
-        if self.group_id:
-            return f"{self.bot_id}:group:{self.group_id}"
-        return f"{self.bot_id}:private:{self.user_id}"
+        return session_state_key(
+            self.relationship_profile_id,
+            self.bot_id,
+            self.user_id,
+            self.group_id,
+        )
 
     @property
     def pressure_key(self) -> str:
         """当前会话内某个用户造成的独立互动压力。"""
-        return f"{self.session_key}:user:{self.user_id}"
+        return pressure_state_key(self.session_key, self.user_id)
 
     @property
     def is_private(self) -> bool:
@@ -115,6 +132,7 @@ class InteractionEvent:
     evidence_refs: tuple[str, ...] = ()
     person_id: str = ""
     state_alias_keys: tuple[str, ...] = ()
+    relationship_profile_id: str = DEFAULT_PROFILE_ID
 
     @property
     def scope(self) -> RelationshipScope:
@@ -124,11 +142,17 @@ class InteractionEvent:
             self.group_id,
             self.person_id,
             self.state_alias_keys,
+            self.relationship_profile_id,
         )
 
     @property
     def relationship_user_id(self) -> str:
         return self.person_id or self.user_id
+
+    @property
+    def relationship_whitelist_ids(self) -> tuple[str, ...]:
+        identity = self.relationship_user_id
+        return (identity, f"{self.relationship_profile_id}/{identity}")
 
     @property
     def is_command(self) -> bool:
@@ -148,6 +172,8 @@ class RelationshipEventRecord:
     bot_id: str
     user_id: str
     group_id: str | None
+    relationship_profile_id: str
+    scope_key: str
     kind: str
     source: str
     confidence: float
@@ -164,6 +190,8 @@ class RelationshipEventRecord:
             "bot_id": self.bot_id,
             "user_id": self.user_id,
             "group_id": self.group_id,
+            "relationship_profile_id": self.relationship_profile_id,
+            "scope_key": self.scope_key,
             "kind": self.kind,
             "source": self.source,
             "confidence": self.confidence,
@@ -183,6 +211,10 @@ class RelationshipEventRecord:
             bot_id=str(data.get("bot_id", "")),
             user_id=str(data.get("user_id", "")),
             group_id=(str(data["group_id"]) if data.get("group_id") else None),
+            relationship_profile_id=str(
+                data.get("relationship_profile_id", DEFAULT_PROFILE_ID)
+            ),
+            scope_key=str(data.get("scope_key", "")),
             kind=str(data.get("kind", KIND_MESSAGE)),
             source=str(data.get("source", SOURCE_DIRECT)),
             confidence=float(data.get("confidence", 1.0)),  # type: ignore[arg-type]
@@ -297,6 +329,8 @@ class UserRelationState:
     daily_anchor_day: str = ""
     interaction_count: int = 0
     last_event_at: float = 0.0
+    initial_prior: str = ""
+    initial_prior_applied_at: float = 0.0
     extra: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -342,6 +376,8 @@ class UserRelationState:
             "daily_anchor_day": self.daily_anchor_day,
             "interaction_count": self.interaction_count,
             "last_event_at": self.last_event_at,
+            "initial_prior": self.initial_prior,
+            "initial_prior_applied_at": self.initial_prior_applied_at,
             "extra": dict(self.extra),
         }
 
@@ -366,6 +402,10 @@ class UserRelationState:
             daily_anchor_day=str(data.get("daily_anchor_day", "")),
             interaction_count=int(data.get("interaction_count", 0)),  # type: ignore[arg-type]
             last_event_at=float(data.get("last_event_at", 0.0)),  # type: ignore[arg-type]
+            initial_prior=str(data.get("initial_prior", "")),
+            initial_prior_applied_at=float(
+                data.get("initial_prior_applied_at", 0.0)  # type: ignore[arg-type]
+            ),
         )
         extra = data.get("extra")
         if isinstance(extra, dict):

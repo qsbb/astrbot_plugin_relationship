@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-情 · 关系状态</title>
-  <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="./style.css?v=0.6.0" />
 </head>
 <body>
   <main class="shell">
@@ -74,8 +74,8 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>用户</th><th>关系层级</th><th>好感</th><th>信任</th><th>熟悉度</th><th>互动</th><th>白名单</th><th>边界</th><th>最后互动</th></tr></thead>
-            <tbody id="relation-tbody"><tr class="empty-row"><td colspan="9">加载中…</td></tr></tbody>
+            <thead><tr><th>用户</th><th>关系人格</th><th>关系层级</th><th>好感</th><th>信任</th><th>熟悉度</th><th>互动</th><th>白名单</th><th>边界</th><th>最后互动</th></tr></thead>
+            <tbody id="relation-tbody"><tr class="empty-row"><td colspan="10">加载中…</td></tr></tbody>
           </table>
         </div>
       </article>
@@ -102,6 +102,19 @@
           <div class="identity-fields">
             <label>显示名称<input id="person-display-name" type="text" maxlength="80" autocomplete="off" /></label>
             <label>内部 ID<input id="person-id" type="text" maxlength="64" placeholder="留空自动生成" autocomplete="off" /></label>
+            <label>关系人格
+              <select id="relationship-profile-id" aria-describedby="relationship-profile-hint"></select>
+              <small id="relationship-profile-hint">账号归属和初始关系将作用于此人格。</small>
+            </label>
+            <label>一次性初始关系
+              <select id="initial-prior" aria-describedby="initial-prior-hint">
+                <option value="">不设置</option>
+                <option value="neutral">中性</option>
+                <option value="acquainted">已认识</option>
+                <option value="fond">有好感</option>
+              </select>
+              <small id="initial-prior-hint">仅能为尚未产生互动的新关系设置一次。</small>
+            </label>
           </div>
           <div class="account-heading">
             <h3>平台账号</h3>
@@ -118,7 +131,7 @@
         <div class="section-heading">
           <div>
             <h2>插件配置</h2>
-            <p>修改后保存即热应用，无需重启；配置持久化到 AstrBot 数据目录。</p>
+            <p>配置通常会立即生效；旧数据归属人格在重启迁移时生效。</p>
           </div>
           <div class="toolbar">
             <button id="btn-reset-config" type="button">重置</button>
@@ -132,6 +145,6 @@
     <div id="toast" class="hidden" role="status" aria-live="polite"></div>
   </main>
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script type="module" src="./app.js"></script>
+  <script type="module" src="./app.js?v=0.6.0"></script>
 </body>
 </html>

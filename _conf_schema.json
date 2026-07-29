@@ -51,6 +51,68 @@
     "description": "连续硬静默上限，0 表示不限制",
     "default": 2
   },
+  "AFFECT_ENABLED": {
+    "type": "bool",
+    "description": "启用由可信语义事件驱动、按会话隔离并自然衰减的短期亲近或戒备倾向",
+    "default": true
+  },
+  "AFFECT_HALF_LIFE_SECONDS": {
+    "type": "float",
+    "description": "短期亲近与戒备倾向的衰减半衰期（秒）",
+    "default": 1800,
+    "minimum": 10,
+    "maximum": 604800
+  },
+  "AFFECT_POSITIVE_GAIN": {
+    "type": "float",
+    "description": "单次满强度正向语义事件带来的短期亲近增量",
+    "default": 24,
+    "minimum": 0,
+    "maximum": 100
+  },
+  "AFFECT_NEGATIVE_GAIN": {
+    "type": "float",
+    "description": "单次满强度负向语义事件带来的短期戒备增量",
+    "default": 32,
+    "minimum": 0,
+    "maximum": 100
+  },
+  "AFFECT_STANCE_THRESHOLD": {
+    "type": "float",
+    "description": "短期亲近或戒备开始影响语气的触发阈值",
+    "default": 15,
+    "minimum": 0,
+    "maximum": 100
+  },
+  "DYNAMICS_EARLY_BOOST": {
+    "type": "float",
+    "description": "关系早期对可信语义事件的额外可塑性增幅；会随证据积累平滑衰减",
+    "default": 0.25,
+    "minimum": 0,
+    "maximum": 1
+  },
+  "DYNAMICS_EVIDENCE_HALF_LIFE": {
+    "type": "float",
+    "description": "早期可塑性增幅减半所需的累计可信语义证据量",
+    "default": 12,
+    "minimum": 0.1,
+    "maximum": 10000
+  },
+  "RELATIONSHIP_DEFAULT_PROFILE_ID": {
+    "type": "string",
+    "description": "无法取得 AstrBot Persona ID 时使用的默认关系档案 ID",
+    "default": "default"
+  },
+  "RELATIONSHIP_LEGACY_PROFILE_ID": {
+    "type": "string",
+    "description": "旧数据只迁入此关系档案；修改仅在首次 v3 -> v4 迁移前有效，留空回退 default",
+    "default": "default"
+  },
+  "RELATIONSHIP_PERSONA_PROFILE_MAP": {
+    "type": "string",
+    "description": "AstrBot Persona 到关系档案的映射，格式 persona_id=profile_id；多项可用逗号、分号或换行分隔",
+    "default": ""
+  },
   "AFFINITY_MESSAGE_GAIN": {
     "type": "float",
     "description": "普通有效消息的好感微增量",
@@ -88,7 +150,7 @@
   },
   "AFFINITY_WHITELIST_USER_IDS": {
     "type": "string",
-    "description": "高好感白名单 ID，多个用英文逗号分隔；未绑定账号填平台用户 ID，账号归属后填自然人内部 person_id；留空表示没有白名单",
+    "description": "高好感白名单，多个用英文逗号分隔；profile_id/person_id 只命中指定关系人格，裸 person_id 兼容为所有人格，未绑定账号可填平台 UID",
     "default": ""
   },
   "AFFINITY_HIGH_THRESHOLD": {

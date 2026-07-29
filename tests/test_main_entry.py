@@ -241,6 +241,128 @@ class MainEntryTest(unittest.TestCase):
         self.assertNotIn("familiarity", snapshot)
         self.assertEqual(snapshot["behavior"]["followup"], "allow")
 
+    def test_relationship_event_contract_records_trusted_semantics(self) -> None:
+        contract = self.plugin.relationship_event_contract()
+        self.assertEqual(contract["name"], "relationship.event")
+        self.assertEqual(contract["version"], "1.0")
+        self.assertNotIn("initial_prior", contract["event_kinds"])
+
+        result = _run(
+            self.plugin.submit_relationship_event(
+                {
+                    "version": "1.0",
+                    "bot_id": "bot-1",
+                    "user_id": "user-1",
+                    "event_id": "verified-praise-1",
+                    "kind": "praise",
+                    "source": "direct",
+                    "relationship_profile_id": "persona-a",
+                    "confidence": 1,
+                    "severity": 1,
+                }
+            )
+        )
+
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["snapshot"]["behavior"]["tone"], "warm_attentive")
+        state = self.plugin.manager._states[
+            "persona:persona-a:account:bot-1:user:user-1"
+        ]
+        self.assertGreater(state.affinity_score, 50)
+        with self.assertRaisesRegex(ValueError, "RELATIONSHIP_EVENT_ID_REQUIRED"):
+            _run(
+                self.plugin.submit_relationship_event(
+                    {
+                        "bot_id": "bot-1",
+                        "user_id": "user-1",
+                        "kind": "praise",
+                        "source": "direct",
+                    }
+                )
+            )
+
+    def test_relationship_event_resolves_bound_person_without_platform(self) -> None:
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                    },
+                    {
+                        "platform_id": "telegram-main",
+                        "user_id": "tg-user",
+                        "bot_id": "tg-bot",
+                    },
+                ],
+            }
+        )
+
+        result = _run(
+            self.plugin.submit_relationship_event(
+                {
+                    "bot_id": "bot-1",
+                    "user_id": "user-1",
+                    "event_id": "bound-praise-1",
+                    "kind": "praise",
+                    "source": "direct",
+                }
+            )
+        )
+
+        self.assertTrue(result["accepted"])
+        self.assertIn("persona:default:person:summer", self.plugin.manager._states)
+        self.assertNotIn(
+            "persona:default:account:bot-1:user:user-1",
+            self.plugin.manager._states,
+        )
+
+    def test_relationship_event_rejects_ambiguous_unqualified_account(self) -> None:
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "shared-user",
+                        "bot_id": "bot-1",
+                    }
+                ],
+            }
+        )
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "other",
+                "display_name": "另一人",
+                "accounts": [
+                    {
+                        "platform_id": "telegram-main",
+                        "user_id": "shared-user",
+                        "bot_id": "bot-1",
+                    }
+                ],
+            }
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "RELATIONSHIP_EVENT_IDENTITY_AMBIGUOUS"
+        ):
+            _run(
+                self.plugin.submit_relationship_event(
+                    {
+                        "bot_id": "bot-1",
+                        "user_id": "shared-user",
+                        "event_id": "ambiguous-praise-1",
+                        "kind": "praise",
+                        "source": "direct",
+                    }
+                )
+            )
+
     def test_followup_guard_is_no_longer_owned_by_relationship(self) -> None:
         self.assertFalse(hasattr(main.RelationshipPlugin, "on_llm_response"))
         schema = json.loads((_PLUGIN_ROOT / "_conf_schema.json").read_text("utf-8"))
@@ -257,7 +379,9 @@ class MainEntryTest(unittest.TestCase):
         req = object()
         _run(self.plugin.on_llm_request(FakeEvent(text="今天聊聊"), req))
         snapshot = _run(self.plugin.manager.get_snapshot("bot-1", "user-1", None))
-        state = self.plugin.manager._states.get("bot-1:user:user-1")
+        state = self.plugin.manager._states.get(
+            "persona:default:account:bot-1:user:user-1"
+        )
         self.assertIsNotNone(state)
         self.assertEqual(state.interaction_count, 1)
         self.assertGreaterEqual(snapshot.familiarity, 0)
@@ -266,12 +390,117 @@ class MainEntryTest(unittest.TestCase):
 
     def test_on_llm_request_command_text_is_readonly(self) -> None:
         _run(self.plugin.on_llm_request(FakeEvent(text="/rel status"), object()))
-        self.assertNotIn("bot-1:user:user-1", self.plugin.manager._states)
+        self.assertNotIn(
+            "persona:default:account:bot-1:user:user-1",
+            self.plugin.manager._states,
+        )
 
     def test_on_llm_request_missing_identity_is_noop(self) -> None:
         event = FakeEvent(text="hello", bot_id="", sender_id="")
         _run(self.plugin.on_llm_request(event, object()))
         self.assertEqual(self.plugin.manager._states, {})
+
+    def test_on_llm_request_isolates_the_same_user_between_personas(self) -> None:
+        def request(persona_id: str):
+            return types.SimpleNamespace(
+                conversation=types.SimpleNamespace(persona_id=persona_id),
+                extra_user_content_parts=[],
+                system_prompt="",
+            )
+
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(text="persona a", message_id="same"), request("persona-a")
+            )
+        )
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(text="persona b", message_id="same"), request("persona-b")
+            )
+        )
+
+        self.assertIn(
+            "persona:persona-a:account:bot-1:user:user-1",
+            self.plugin.manager._states,
+        )
+        self.assertIn(
+            "persona:persona-b:account:bot-1:user:user-1",
+            self.plugin.manager._states,
+        )
+
+    def test_persona_mapping_can_share_one_relationship_profile(self) -> None:
+        self.plugin._persona_profile_map = {
+            "persona-a": "companion",
+            "persona-b": "companion",
+        }
+
+        def request(persona_id: str):
+            return types.SimpleNamespace(
+                conversation=types.SimpleNamespace(persona_id=persona_id),
+                extra_user_content_parts=[],
+                system_prompt="",
+            )
+
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(message_id="a"), request("persona-a")
+            )
+        )
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(message_id="b"), request("persona-b")
+            )
+        )
+
+        state = self.plugin.manager._states[
+            "persona:companion:account:bot-1:user:user-1"
+        ]
+        self.assertEqual(state.interaction_count, 2)
+        self.assertEqual(len(self.plugin.manager._states), 1)
+
+    def test_resolved_session_persona_overrides_conversation_persona(self) -> None:
+        class PersonaManager:
+            default_persona = "default-persona"
+
+            @staticmethod
+            async def resolve_selected_persona(**_kwargs):
+                return ("forced-persona", None, "forced-persona", False)
+
+        self.context.persona_manager = PersonaManager()
+        req = types.SimpleNamespace(
+            conversation=types.SimpleNamespace(persona_id="conversation-persona"),
+            extra_user_content_parts=[],
+            system_prompt="",
+        )
+
+        _run(self.plugin.on_llm_request(FakeEvent(), req))
+
+        self.assertIn(
+            "persona:forced-persona:account:bot-1:user:user-1",
+            self.plugin.manager._states,
+        )
+
+    def test_rel_reset_uses_cached_persona_when_resolver_fails(self) -> None:
+        event = FakeEvent()
+        req = types.SimpleNamespace(
+            conversation=types.SimpleNamespace(persona_id="persona-a"),
+            extra_user_content_parts=[],
+            system_prompt="",
+        )
+        _run(self.plugin.on_llm_request(event, req))
+
+        class PersonaManager:
+            @staticmethod
+            async def resolve_selected_persona(**_kwargs):
+                raise RuntimeError("resolver unavailable")
+
+        self.context.persona_manager = PersonaManager()
+        _run(_collect(self.plugin.rel_reset(event)))
+
+        self.assertNotIn(
+            "persona:persona-a:account:bot-1:user:user-1",
+            self.plugin.manager._states,
+        )
 
     # -- /rel 命令 -----------------------------------------------------
 
@@ -291,11 +520,12 @@ class MainEntryTest(unittest.TestCase):
 
     def test_rel_reset_clears_state(self) -> None:
         _run(self.plugin.on_llm_request(FakeEvent(text="累积一次互动"), object()))
-        self.assertIn("bot-1:user:user-1", self.plugin.manager._states)
+        key = "persona:default:account:bot-1:user:user-1"
+        self.assertIn(key, self.plugin.manager._states)
         results = _run(_collect(self.plugin.rel_reset(FakeEvent())))
         self.assertEqual(len(results), 1)
         self.assertIn("已重置", results[0])
-        self.assertNotIn("bot-1:user:user-1", self.plugin.manager._states)
+        self.assertNotIn(key, self.plugin.manager._states)
 
     def test_rel_reset_rejects_unknown_identity(self) -> None:
         event = FakeEvent(bot_id="", sender_id="")
@@ -312,7 +542,10 @@ class MainEntryTest(unittest.TestCase):
         state_file = Path(self._tmp.name) / "relationship_state.json"
         self.assertTrue(state_file.exists())
         payload = json.loads(state_file.read_text(encoding="utf-8"))
-        self.assertIn("bot-1:user:user-1", payload.get("users", {}))
+        self.assertIn(
+            "persona:default:account:bot-1:user:user-1",
+            payload.get("users", {}),
+        )
 
     # -- Plugin Page ---------------------------------------------------
 
@@ -323,6 +556,7 @@ class MainEntryTest(unittest.TestCase):
         self.assertEqual(payload["plugin"]["version"], main.__version__)
         self.assertEqual(payload["summary"]["user_count"], 1)
         self.assertEqual(payload["users"][0]["user_id"], "user-1")
+        self.assertEqual(payload["users"][0]["relationship_profile_id"], "default")
         self.assertIn(payload["users"][0]["boundary"], ("开放", "谨慎"))
 
     def _save_identity(self, body: dict) -> dict:
@@ -331,6 +565,67 @@ class MainEntryTest(unittest.TestCase):
 
         self.plugin._request_json = fake_request_json
         return _run(self.plugin._page_save_identity())
+
+    def test_identity_rejects_invalid_profile_before_persisting(self) -> None:
+        payload = self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "relationship_profile_id": "bad/profile",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                    }
+                ],
+            }
+        )
+
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error"], "INVALID_RELATIONSHIP_PROFILE_ID")
+        self.assertIsNone(self.plugin.identity_registry.get("summer"))
+
+    def test_identity_binding_failure_rolls_back_registry_and_relation(self) -> None:
+        _run(self.plugin.on_llm_request(FakeEvent(), object()))
+        alias = "persona:default:account:bot-1:user:user-1"
+
+        class FailingRepository:
+            @staticmethod
+            def save(_states, _events) -> None:
+                raise OSError("disk unavailable")
+
+        self.plugin.manager._repo = FailingRepository()
+        payload = self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                    }
+                ],
+            }
+        )
+
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error"], "RELATIONSHIP_PERSIST_FAILED")
+        self.assertIsNone(self.plugin.identity_registry.get("summer"))
+        self.assertIn(alias, self.plugin.manager._states)
+
+    def test_identity_page_lists_runtime_persona_profiles(self) -> None:
+        req = types.SimpleNamespace(
+            conversation=types.SimpleNamespace(persona_id="runtime-persona"),
+            extra_user_content_parts=[],
+            system_prompt="",
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(), req))
+
+        payload = _run(self.plugin._page_identities())
+
+        self.assertIn("runtime-persona", payload["relationship_profiles"])
 
     def test_identity_binding_shares_relationship_state_between_platforms(self) -> None:
         payload = self._save_identity(
@@ -368,15 +663,16 @@ class MainEntryTest(unittest.TestCase):
             )
         )
 
-        canonical = self.plugin.manager._states["person:user:summer"]
+        canonical_key = "persona:default:person:summer"
+        canonical = self.plugin.manager._states[canonical_key]
         self.assertEqual(canonical.interaction_count, 2)
-        self.assertEqual(
-            self.plugin.manager._states["bot-1:user:user-1"].as_dict(),
-            canonical.as_dict(),
+        self.assertNotIn(
+            "persona:default:account:bot-1:user:user-1",
+            self.plugin.manager._states,
         )
-        self.assertEqual(
-            self.plugin.manager._states["tg-bot:user:tg-user"].as_dict(),
-            canonical.as_dict(),
+        self.assertNotIn(
+            "persona:default:account:tg-bot:user:tg-user",
+            self.plugin.manager._states,
         )
         context = main.ensure_context(qq_event)
         identity = context["artifacts"]["relationship"]["canonical_identity"]
@@ -388,6 +684,37 @@ class MainEntryTest(unittest.TestCase):
                 "permission_identity_mode": "raw_platform_account",
             },
         )
+
+    def test_identity_can_apply_one_fixed_initial_prior(self) -> None:
+        body = {
+            "person_id": "summer",
+            "display_name": "心夏",
+            "relationship_profile_id": "persona-a",
+            "initial_prior": "fond",
+            "accounts": [
+                {
+                    "platform_id": "qq-main",
+                    "user_id": "user-1",
+                    "bot_id": "bot-1",
+                    "memory_profile_id": "persona-a",
+                }
+            ],
+        }
+
+        first = self._save_identity(body)
+        second = self._save_identity(body)
+
+        self.assertTrue(first["initial_prior"]["applied"])
+        self.assertFalse(second["initial_prior"]["applied"])
+        self.assertEqual(
+            second["initial_prior"]["error"], "INITIAL_PRIOR_ALREADY_APPLIED"
+        )
+        state = self.plugin.manager._states[
+            "persona:persona-a:person:summer"
+        ]
+        self.assertEqual(state.affinity_score, 64)
+        self.assertEqual(state.trust_score, 60)
+        self.assertEqual(state.familiarity_score, 25)
 
     def test_cross_platform_memory_queries_only_other_verified_account(self) -> None:
         self._save_identity(
@@ -440,7 +767,12 @@ class MainEntryTest(unittest.TestCase):
         artifact = context["artifacts"]["relationship"]["cross_platform_memory"]
         self.assertEqual(
             set(artifact),
-            {"queried_accounts", "injected_chars", "provider"},
+            {
+                "queried_accounts",
+                "injected_chars",
+                "provider",
+                "relationship_profile_id",
+            },
         )
         fragments = context["artifacts"]["relationship"]["prompt_fragments"]
         self.assertNotIn("person_id", fragments[0]["metadata"])
@@ -455,6 +787,47 @@ class MainEntryTest(unittest.TestCase):
             self.assertIs(self.plugin._memory_companion_bridge(), bridge)
         finally:
             sys.modules.pop(module_name, None)
+
+    def test_cross_platform_memory_does_not_cross_relationship_profiles(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                        "memory_profile_id": "persona-a",
+                    },
+                    {
+                        "platform_id": "telegram-main",
+                        "user_id": "tg-user",
+                        "bot_id": "tg-bot",
+                        "memory_profile_id": "persona-b",
+                    },
+                ],
+            }
+        )
+        calls = []
+
+        class Bridge:
+            @staticmethod
+            async def compose_injection(*args, **kwargs):
+                calls.append((args, kwargs))
+                return "should not be used"
+
+        self.plugin._memory_companion_bridge = lambda: Bridge()
+        req = types.SimpleNamespace(
+            conversation=types.SimpleNamespace(persona_id="persona-a"),
+            extra_user_content_parts=[],
+            system_prompt="",
+        )
+
+        _run(self.plugin.on_cross_platform_memory(FakeEvent(), req))
+
+        self.assertEqual(calls, [])
+        self.assertEqual(req.extra_user_content_parts, [])
 
     def test_page_delete_identity_keeps_relationship_state(self) -> None:
         self._save_identity(
@@ -479,7 +852,9 @@ class MainEntryTest(unittest.TestCase):
         payload = _run(self.plugin._page_delete_identity())
         self.assertTrue(payload["success"])
         self.assertIsNone(self.plugin.identity_registry.get("summer"))
-        self.assertIn("person:user:summer", self.plugin.manager._states)
+        self.assertIn(
+            "persona:default:person:summer", self.plugin.manager._states
+        )
 
     # -- Plugin Page 配置 API ------------------------------------------
 
@@ -502,6 +877,17 @@ class MainEntryTest(unittest.TestCase):
         self.assertTrue(payload["success"])
         self.assertEqual(payload["config"]["MOOD_WINDOW_SECONDS"], 600)
         self.assertEqual(self.plugin.manager._mood._window, 600)
+
+    def test_page_save_config_ignores_unchanged_legacy_profile(self) -> None:
+        payload = self._save_config(
+            {"RELATIONSHIP_LEGACY_PROFILE_ID": self.plugin._legacy_profile_id}
+        )
+
+        self.assertTrue(payload["success"])
+        self.assertFalse(payload["restart_required"])
+        self.assertFalse(
+            (Path(self._tmp.name) / main._CONFIG_STORE_NAME).exists()
+        )
 
     def test_page_save_config_rejects_unknown_field(self) -> None:
         payload = self._save_config({"UNKNOWN_KEY": 1})

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from .profiles import account_state_key, person_state_key, validate_profile_id
+
 SCHEMA_VERSION = 1
 MAX_PERSONS = 1000
 MAX_ACCOUNTS_PER_PERSON = 20
@@ -29,6 +31,7 @@ class PlatformAccount:
     bot_id: str = ""
     session_id: str = ""
     label: str = ""
+    memory_profile_id: str = ""
 
     @property
     def key(self) -> str:
@@ -40,6 +43,11 @@ class PlatformAccount:
             return ""
         return f"{self.bot_id}:user:{self.user_id}"
 
+    def state_key_for(self, profile_id: str) -> str:
+        if not self.bot_id or not self.user_id:
+            return ""
+        return account_state_key(profile_id, self.bot_id, self.user_id)
+
     def as_dict(self) -> dict[str, str]:
         return {
             "platform_id": self.platform_id,
@@ -47,16 +55,25 @@ class PlatformAccount:
             "bot_id": self.bot_id,
             "session_id": self.session_id,
             "label": self.label,
+            "memory_profile_id": self.memory_profile_id,
         }
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "PlatformAccount":
+        raw_memory_profile = _clean(value.get("memory_profile_id"), 64)
+        try:
+            memory_profile_id = (
+                validate_profile_id(raw_memory_profile) if raw_memory_profile else ""
+            )
+        except ValueError:
+            memory_profile_id = ""
         return cls(
             platform_id=_clean(value.get("platform_id") or value.get("platform"), 120),
             user_id=_clean(value.get("user_id"), 120),
             bot_id=_clean(value.get("bot_id"), 120),
             session_id=_clean(value.get("session_id"), 240),
             label=_clean(value.get("label"), 80),
+            memory_profile_id=memory_profile_id,
         )
 
 
@@ -72,9 +89,21 @@ class PersonIdentity:
     def relationship_key(self) -> str:
         return f"person:user:{self.person_id}"
 
+    def relationship_key_for(self, profile_id: str) -> str:
+        return person_state_key(profile_id, self.person_id)
+
     @property
     def alias_state_keys(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(account.state_key for account in self.accounts if account.state_key))
+
+    def alias_state_keys_for(self, profile_id: str) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                account.state_key_for(profile_id)
+                for account in self.accounts
+                if account.state_key_for(profile_id)
+            )
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -110,6 +139,16 @@ class IdentityRegistry:
     def get(self, person_id: str) -> PersonIdentity | None:
         return self._persons.get(_clean(person_id, 64))
 
+    def snapshot(self) -> dict[str, PersonIdentity]:
+        """Return an immutable-value snapshot for a surrounding transaction."""
+        return dict(self._persons)
+
+    def restore(self, persons: dict[str, PersonIdentity]) -> None:
+        """Atomically restore a previously captured registry snapshot."""
+        restored = dict(persons)
+        self._write(restored)
+        self._persons = restored
+
     def resolve(
         self,
         *,
@@ -137,6 +176,32 @@ class IdentityRegistry:
                 return ResolvedIdentity(person=person, account=account)
         return None
 
+    def resolve_unique_account(
+        self,
+        *,
+        user_id: str,
+        bot_id: str = "",
+    ) -> ResolvedIdentity | None:
+        """Resolve without a platform only when all matching accounts share a person."""
+        user_id = _clean(user_id, 120)
+        bot_id = _clean(bot_id, 120)
+        if not user_id:
+            return None
+        matches: dict[str, ResolvedIdentity] = {}
+        for person in self._persons.values():
+            for account in person.accounts:
+                if account.user_id != user_id:
+                    continue
+                if account.bot_id and account.bot_id != bot_id:
+                    continue
+                matches.setdefault(
+                    person.person_id,
+                    ResolvedIdentity(person=person, account=account),
+                )
+        if len(matches) > 1:
+            raise ValueError("AMBIGUOUS_ACCOUNT")
+        return next(iter(matches.values()), None)
+
     def upsert(self, payload: dict[str, Any]) -> PersonIdentity:
         person_id = _clean(payload.get("person_id"), 64)
         if not person_id:
@@ -157,6 +222,12 @@ class IdentityRegistry:
         for raw in raw_accounts:
             if not isinstance(raw, dict):
                 raise ValueError("INVALID_ACCOUNT")
+            raw_memory_profile = _clean(raw.get("memory_profile_id"), 64)
+            if raw_memory_profile:
+                try:
+                    validate_profile_id(raw_memory_profile)
+                except ValueError as exc:
+                    raise ValueError("INVALID_MEMORY_PROFILE_ID") from exc
             account = PlatformAccount.from_dict(raw)
             if not account.platform_id or not account.user_id:
                 raise ValueError("ACCOUNT_ID_REQUIRED")

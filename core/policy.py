@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .affect import (
+    STANCE_GUARDED,
+    STANCE_WARM,
+    AffectDecision,
+)
 from .mood import MOOD_ANNOYED, MOOD_LAZY, MoodDecision
 from .models import BehaviorAdvice, RelationshipSnapshot, UserRelationState, clamp_score
 
@@ -46,12 +51,17 @@ _AFFINITY_FRAGMENTS = {
     "fond": "可适度亲近和关心。",
     "distant": "保持礼貌，不必刻意热络。",
 }
+_AFFECT_FRAGMENTS = {
+    STANCE_GUARDED: "本轮语气应更克制有分寸，但不要敌意、惩罚或翻旧账。",
+    STANCE_WARM: "本轮语气可显得更温和、亲近和上心，但不要越界或擅自承诺。",
+}
 
 
 def build_snapshot(
     decision: MoodDecision,
     state: UserRelationState,
     config: PolicyConfig | None = None,
+    affect: AffectDecision | None = None,
 ) -> RelationshipSnapshot:
     """构造数据快照；所有行为字段仅为建议，不产生任何执行效果。"""
     cfg = config or PolicyConfig()
@@ -66,25 +76,34 @@ def build_snapshot(
     trust = clamp_score(sum(trust_dimensions.values()) / len(trust_dimensions))
     familiarity_tier = _familiarity_tier(familiarity)
     affinity_tier = _affinity_tier(affinity)
+    affect = affect or AffectDecision()
 
     tone = "natural"
     length = "normal"
     initiative = "normal"
     if cfg.enable_style_hint:
+        if familiarity_tier == "old_friend" and affinity_tier == "fond":
+            tone, initiative = "warm_playful", "high"
+        elif familiarity_tier == "stranger" or affinity_tier == "distant":
+            tone, initiative = "polite_reserved", "low"
+        if affect.stance == STANCE_GUARDED:
+            tone = "polite_reserved"
+        elif affect.stance == STANCE_WARM:
+            tone = "warm_attentive"
         if decision.mood == MOOD_ANNOYED:
             tone, length, initiative = "cool_polite", "minimal", "low"
         elif decision.mood == MOOD_LAZY:
             tone, length, initiative = "short_casual", "short", "low"
-        elif familiarity_tier == "old_friend" and affinity_tier == "fond":
-            tone, initiative = "warm_playful", "high"
-        elif familiarity_tier == "stranger" or affinity_tier == "distant":
-            tone, initiative = "polite_reserved", "low"
 
     fragments: list[str] = []
     if cfg.enable_prompt_fragment and not decision.should_silence:
         mood_fragment = _MOOD_FRAGMENTS.get(decision.mood)
         if mood_fragment:
             fragments.append(mood_fragment)
+        else:
+            affect_fragment = _AFFECT_FRAGMENTS.get(affect.stance)
+            if affect_fragment:
+                fragments.append(affect_fragment)
         fragments.append(_FAMILIARITY_FRAGMENTS[familiarity_tier])
         affinity_fragment = _AFFINITY_FRAGMENTS.get(affinity_tier)
         if affinity_fragment:

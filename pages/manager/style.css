@@ -208,6 +208,7 @@ td {
 }
 th { color: var(--muted); font-size: 12px; font-weight: 600; background: rgba(7, 17, 29, .35); }
 .user-id { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.profile-id { color: var(--accent); font-size: 12px; }
 tbody tr:hover { background: rgba(93, 214, 192, .045); }
 .empty-row td { padding: 28px; text-align: center; color: var(--muted); }
 .badge {
@@ -291,6 +292,7 @@ button.primary:disabled { opacity: .55; }
   font-size: 12px;
 }
 .identity-fields input,
+.identity-fields select,
 .account-row input {
   min-width: 0;
   width: 100%;
@@ -301,7 +303,13 @@ button.primary:disabled { opacity: .55; }
   border-radius: 8px;
 }
 .identity-fields input:focus,
+.identity-fields select:focus,
 .account-row input:focus { outline: none; border-color: var(--accent); }
+.identity-fields small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
 .account-heading {
   display: flex;
   align-items: center;
@@ -312,7 +320,7 @@ button.primary:disabled { opacity: .55; }
 .account-list { display: grid; gap: 10px; }
 .account-row {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1.4fr .8fr 40px;
+  grid-template-columns: 1fr 1fr 1fr 1.4fr 1.1fr .8fr 40px;
   gap: 8px;
   align-items: end;
   padding: 12px;
@@ -350,6 +358,7 @@ button.primary:disabled { opacity: .55; }
 }
 .config-input { display: flex; flex-direction: column; gap: 4px; }
 .config-input input[type="number"],
+.config-input input[type="text"],
 .config-input select {
   width: 100%;
   max-width: 320px;
@@ -361,10 +370,12 @@ button.primary:disabled { opacity: .55; }
   border-radius: 8px;
 }
 .config-input input[type="number"]:focus,
+.config-input input[type="text"]:focus,
 .config-input select:focus {
   outline: none;
   border-color: var(--accent);
 }
+.config-input input.config-text-wide { max-width: 100%; }
 .config-input input[type="checkbox"] {
   width: 18px;
   height: 18px;

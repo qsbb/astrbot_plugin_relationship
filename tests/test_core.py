@@ -396,8 +396,9 @@ class RepositoryTest(unittest.TestCase):
             )
             repo.save_all({"bot:user:u1": state})
             loaded = repo.load_all()
-            self.assertIn("bot:user:u1", loaded)
-            self.assertAlmostEqual(loaded["bot:user:u1"].affinity_score, 66.5)
+            key = "persona:default:account:bot:user:u1"
+            self.assertIn(key, loaded)
+            self.assertAlmostEqual(loaded[key].affinity_score, 66.5)
             payload = json.loads((Path(tmp) / "rel.json").read_text(encoding="utf-8"))
             self.assertEqual(payload["schema_version"], SCHEMA_VERSION)
 
@@ -414,7 +415,8 @@ class RepositoryTest(unittest.TestCase):
                 encoding="utf-8",
             )
             loaded = JsonRepository(path).load_all()
-            self.assertAlmostEqual(loaded["bot:user:u1"].affinity_score, 77.0)
+            key = "persona:default:account:bot:user:u1"
+            self.assertAlmostEqual(loaded[key].affinity_score, 77.0)
 
     def test_future_schema_is_safe_empty_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -432,6 +434,21 @@ class RepositoryTest(unittest.TestCase):
             self.assertEqual(
                 json.loads(path.read_text(encoding="utf-8"))["schema_version"], 999
             )
+
+    def test_negative_schema_is_preserved_and_write_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rel.json"
+            original = {
+                "schema_version": -1,
+                "users": {"unknown": {"affinity_score": 99}},
+            }
+            path.write_text(json.dumps(original), encoding="utf-8")
+
+            repo = JsonRepository(path)
+            self.assertEqual(repo.load_all(), {})
+            with self.assertRaises(OSError):
+                repo.save_all({"bot:user:u1": UserRelationState()})
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), original)
 
     def test_corrupted_file_returns_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -462,17 +479,22 @@ class ManagerTest(unittest.TestCase):
         self.assertEqual(snap.mood, MOOD_NORMAL)
         self.assertIsInstance(snap.prompt_fragment, str)
 
-    def test_bound_accounts_share_and_mirror_long_term_state(self) -> None:
+    def test_bound_accounts_share_without_live_alias_mirrors(self) -> None:
         mgr = self._manager()
         _run(mgr.record(_event(user_id="u1", event_id="u1-first")))
         _run(mgr.record(_event(user_id="u2", event_id="u2-first", ts=1200.0)))
-        aliases = ("bot:user:u1", "bot:user:u2")
+        aliases = (
+            "persona:default:account:bot:user:u1",
+            "persona:default:account:bot:user:u2",
+        )
 
-        self.assertTrue(_run(mgr.bind_identity("person:user:summer", aliases)))
+        canonical_key = "persona:default:person:summer"
+        self.assertTrue(_run(mgr.bind_identity(canonical_key, aliases)))
 
-        canonical = mgr._states["person:user:summer"]
-        self.assertEqual(mgr._states[aliases[0]].as_dict(), canonical.as_dict())
-        self.assertEqual(mgr._states[aliases[1]].as_dict(), canonical.as_dict())
+        canonical = mgr._states[canonical_key]
+        interaction_count = canonical.interaction_count
+        self.assertNotIn(aliases[0], mgr._states)
+        self.assertNotIn(aliases[1], mgr._states)
 
         _run(
             mgr.record(
@@ -485,9 +507,10 @@ class ManagerTest(unittest.TestCase):
                 )
             )
         )
-        updated = mgr._states["person:user:summer"]
-        self.assertEqual(mgr._states[aliases[0]].as_dict(), updated.as_dict())
-        self.assertEqual(mgr._states[aliases[1]].as_dict(), updated.as_dict())
+        updated = mgr._states[canonical_key]
+        self.assertGreater(updated.interaction_count, interaction_count)
+        self.assertNotIn(aliases[0], mgr._states)
+        self.assertNotIn(aliases[1], mgr._states)
 
     def test_person_id_is_used_for_affinity_whitelist(self) -> None:
         calculator = AffinityCalculator(
@@ -732,7 +755,7 @@ class ManagerTest(unittest.TestCase):
             mgr.record(_event(kind=models.KIND_PRAISE, ts=1000.0, event_id="old"))
         )
         self.assertEqual(first.affinity, second.affinity)
-        state = mgr._states["bot:user:u1"]
+        state = mgr._states["persona:default:account:bot:user:u1"]
         self.assertEqual(state.last_event_at, 2000.0)
         self.assertEqual(state.daily_anchor_day, "1970-01-01")
         self.assertEqual(state.daily_affinity_positive_used, 5.0)
@@ -835,7 +858,9 @@ class ManagerTest(unittest.TestCase):
             mgr.record(_event(user_id="u2", text="first", ts=1010.0, event_id="u2-1"))
         )
         self.assertLess(other.willingness, 100)
-        pressure = mgr._mood.peek("bot:group:g1:user:u2", now=1010.0)
+        pressure = mgr._mood.peek(
+            "persona:default:session:bot:group:g1:user:u2", now=1010.0
+        )
         self.assertEqual(pressure.interaction_count, 1)
 
     def test_mood_can_be_disabled_without_disabling_long_term(self) -> None:

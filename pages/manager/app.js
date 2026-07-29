@@ -4,10 +4,15 @@ const bands = ["高好感 / 信任圈", "朋友", "普通熟人", "保持距离"
 
 const CONFIG_GROUPS = [
   { title: "情绪追踪", prefix: "MOOD_" },
+  { title: "短期态度", prefix: "AFFECT_" },
   { title: "好感计算", prefix: "AFFINITY_" },
   { title: "信任计算", prefix: "TRUST_" },
   { title: "熟悉度计算", prefix: "FAMILIARITY_" },
+  { title: "关系成长", prefix: "DYNAMICS_" },
   { title: "衰减速率", prefix: "DECAY_" },
+  { title: "关系人格", prefix: "RELATIONSHIP_" },
+  { title: "提示词", prefix: "PROMPT_" },
+  { title: "跨平台记忆", prefix: "CROSS_PLATFORM_MEMORY_" },
   { title: "策略与持久化", prefix: "POLICY_" },
   { title: "存储与日志", prefix: "SAVE_" },
   { title: "存储与日志", prefix: "LOG_" },
@@ -16,6 +21,8 @@ const CONFIG_GROUPS = [
 let configSchema = {};
 let configValues = {};
 let identities = [];
+let relationshipProfiles = ["default"];
+let defaultRelationshipProfile = "default";
 
 function $(selector) {
   return document.querySelector(selector);
@@ -108,13 +115,14 @@ function render(payload) {
   const users = payload?.users || [];
   const tbody = $("#relation-tbody");
   if (!users.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">暂无关系记录</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">暂无关系记录</td></tr>';
     return;
   }
 
   tbody.innerHTML = users.map((user) => (
     `<tr><td>${escapeHtml(user.display_name || user.user_id)}`
     + `${user.display_name ? `<small class="user-id">${escapeHtml(user.user_id)} · ${user.linked_accounts} 个账号</small>` : ""}</td>`
+    + `<td><code class="profile-id">${escapeHtml(user.relationship_profile_id || defaultRelationshipProfile)}</code></td>`
     + `<td>${escapeHtml(user.band)}</td>`
     + `<td>${user.affinity}</td><td>${user.trust}</td><td>${user.familiarity}</td><td>${user.interaction_count}</td>`
     + `<td>${user.whitelisted ? '<span class="badge ok">白名单</span>' : '<span class="badge">普通</span>'}</td>`
@@ -130,7 +138,7 @@ async function load() {
     render(await apiGet("overview"));
   } catch (error) {
     toast(`加载关系状态失败：${error?.message || String(error)}`, true);
-    $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="9">加载失败</td></tr>';
+    $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="10">加载失败</td></tr>';
   } finally {
     if (button) button.disabled = false;
   }
@@ -149,6 +157,9 @@ function renderConfigField(key, field, value) {
       `<option value="${escapeHtml(opt)}"${String(value) === String(opt) ? " selected" : ""}>${escapeHtml(opt)}</option>`
     )).join("");
     input = `<select id="${id}" data-key="${key}">${opts}</select>`;
+  } else if (field.type === "string") {
+    const wideClass = key.endsWith("_MAP") ? " config-text-wide" : "";
+    input = `<input type="text" class="config-text${wideClass}" id="${id}" data-key="${key}" value="${escapeHtml(value)}" />`;
   } else {
     const step = field.type === "float" ? "any" : "1";
     const min = field.minimum ?? "";
@@ -207,13 +218,15 @@ function collectConfigChanges() {
       const raw = el.value;
       const field = configSchema[key];
       if (!field) return;
+      let value;
       if (field.type === "int") {
-        changes[key] = parseInt(raw, 10);
+        value = parseInt(raw, 10);
       } else if (field.type === "float") {
-        changes[key] = parseFloat(raw);
+        value = parseFloat(raw);
       } else {
-        changes[key] = raw;
+        value = raw;
       }
+      if (!Object.is(value, configValues[key])) changes[key] = value;
     }
   });
   return changes;
@@ -231,7 +244,7 @@ async function saveConfig() {
     const data = await apiPost("config", changes);
     configValues = data.config || {};
     renderConfigForm(configSchema, configValues);
-    toast("配置已保存并热应用");
+    toast(data.restart_required ? "配置已保存；旧数据归属需重启后生效" : "配置已保存并热应用");
   } catch (error) {
     toast(`保存配置失败：${error?.message || String(error)}`, true);
   } finally {
@@ -250,6 +263,7 @@ function accountRow(account = {}) {
     + `<label>UID<input data-account="user_id" type="text" maxlength="120" value="${escapeHtml(account.user_id || "")}" /></label>`
     + `<label>Bot ID<input data-account="bot_id" type="text" maxlength="120" value="${escapeHtml(account.bot_id || "")}" /></label>`
     + `<label>UMO<input data-account="session_id" type="text" maxlength="240" value="${escapeHtml(account.session_id || "")}" /></label>`
+    + `<label>关系人格 ID<input data-account="memory_profile_id" type="text" maxlength="64" value="${escapeHtml(account.memory_profile_id || "")}" placeholder="留空使用默认人格" /></label>`
     + `<label>备注<input data-account="label" type="text" maxlength="80" value="${escapeHtml(account.label || "")}" /></label>`
     + `<button type="button" class="remove-account icon-command danger-command" title="移除账号" aria-label="移除账号">×</button>`
     + `</div>`;
@@ -260,6 +274,8 @@ function resetIdentityEditor(accountCount = 2) {
   $("#person-display-name").value = "";
   $("#person-id").value = "";
   $("#person-id").readOnly = false;
+  renderRelationshipProfileOptions(defaultRelationshipProfile);
+  $("#initial-prior").value = "";
   $("#account-list").innerHTML = Array.from({ length: accountCount }, () => accountRow()).join("");
 }
 
@@ -268,11 +284,31 @@ function editIdentity(person) {
   $("#person-display-name").value = person.display_name || "";
   $("#person-id").value = person.person_id || "";
   $("#person-id").readOnly = true;
+  renderRelationshipProfileOptions(person.relationship_profile_id || defaultRelationshipProfile);
+  $("#initial-prior").value = "";
   $("#account-list").innerHTML = (person.accounts || []).map(accountRow).join("") || accountRow();
+}
+
+function renderRelationshipProfileOptions(selectedProfile) {
+  const select = $("#relationship-profile-id");
+  if (!select) return;
+  const selected = selectedProfile || defaultRelationshipProfile;
+  const values = [...new Set([...relationshipProfiles, selected])];
+  select.innerHTML = values.map((profileId) => (
+    `<option value="${escapeHtml(profileId)}"${profileId === selected ? " selected" : ""}>${escapeHtml(profileId)}</option>`
+  )).join("");
 }
 
 function renderIdentities(payload) {
   identities = payload?.persons || [];
+  defaultRelationshipProfile = payload?.default_relationship_profile || "default";
+  relationshipProfiles = Array.isArray(payload?.relationship_profiles)
+    ? payload.relationship_profiles.filter(Boolean)
+    : [];
+  if (!relationshipProfiles.includes(defaultRelationshipProfile)) {
+    relationshipProfiles.unshift(defaultRelationshipProfile);
+  }
+  renderRelationshipProfileOptions($("#relationship-profile-id")?.value || defaultRelationshipProfile);
   const bridgeAvailable = payload?.memory_companion?.available === true;
   $("#memory-bridge-status").textContent = bridgeAvailable
     ? "Memory Companion 已就绪"
@@ -310,6 +346,8 @@ function collectIdentity() {
   return {
     person_id: $("#person-id").value.trim(),
     display_name: $("#person-display-name").value.trim(),
+    relationship_profile_id: $("#relationship-profile-id").value,
+    initial_prior: $("#initial-prior").value,
     accounts,
   };
 }
@@ -322,10 +360,15 @@ async function saveIdentity() {
     if (!payload.display_name || !payload.accounts.length) {
       throw new Error("请填写显示名称和至少一个平台账号");
     }
-    await apiPost("identities", payload);
+    const result = await apiPost("identities", payload);
     await loadIdentities();
     resetIdentityEditor();
-    toast("账号归属已保存");
+    if (result?.initial_prior?.requested === true && result.initial_prior.applied !== true) {
+      const errorCode = result.initial_prior.error || "INITIAL_PRIOR_REJECTED";
+      toast(`账号归属已保存，但初始关系未应用（${errorCode}）`, true);
+    } else {
+      toast(result?.initial_prior?.applied === true ? "账号归属和初始关系已保存" : "账号归属已保存");
+    }
   } catch (error) {
     toast(`保存失败：${error?.message || String(error)}`, true);
   } finally {
@@ -399,5 +442,5 @@ async function init() {
 
 init().catch((error) => {
   toast(`页面启动失败：${error?.message || String(error)}`, true);
-  $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="9">页面启动失败</td></tr>';
+  $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="10">页面启动失败</td></tr>';
 });

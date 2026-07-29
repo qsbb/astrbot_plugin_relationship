@@ -41,29 +41,28 @@ class TrustCalculator:
         if event.source not in models.TRUSTED_SEMANTIC_SOURCES:
             return DimensionDelta(reason="来源不足，信任不变")
 
-        weight = max(0.0, min(1.0, event.confidence)) * max(0.0, event.severity)
         if event.kind == models.KIND_PROMISE_KEPT:
-            value = self._config.promise_kept_gain * weight
+            value = self._config.promise_kept_gain
             return DimensionDelta(
                 trust_reliability=value,
                 trust_integrity=value,
                 reason="经证据确认的履约事实",
             )
         if event.kind == models.KIND_PROMISE_BROKEN:
-            value = self._config.promise_broken_penalty * weight
+            value = self._config.promise_broken_penalty
             return DimensionDelta(
                 trust_reliability=value,
                 trust_integrity=value,
                 reason="经证据确认的失约事实",
             )
         if event.kind == models.KIND_OFFENSE:
-            value = self._config.offense_penalty * weight
+            value = self._config.offense_penalty
             return DimensionDelta(
                 trust_benevolence=value,
                 reason="可信冒犯事件",
             )
         if event.kind == models.KIND_HELP_RECEIVED:
-            value = min(1.0, self._config.promise_kept_gain / 3.0) * weight
+            value = min(1.0, self._config.promise_kept_gain / 3.0)
             return DimensionDelta(
                 trust_benevolence=value,
                 trust_epistemic=value,

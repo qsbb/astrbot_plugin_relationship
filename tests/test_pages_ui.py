@@ -61,6 +61,50 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("AFFINITY_", self.js)
         self.assertIn("TRUST_", self.js)
         self.assertIn("FAMILIARITY_", self.js)
+        self.assertIn("AFFECT_", self.js)
+        self.assertIn("DYNAMICS_", self.js)
+        self.assertIn("RELATIONSHIP_", self.js)
+        self.assertIn("PROMPT_", self.js)
+        self.assertIn("CROSS_PLATFORM_MEMORY_", self.js)
+
+    def test_string_config_is_rendered_as_text(self) -> None:
+        self.assertIn('field.type === "string"', self.js)
+        self.assertIn('<input type="text" class="config-text', self.js)
+
+    def test_overview_shows_relationship_profile(self) -> None:
+        self.assertIn("关系人格", self.html)
+        self.assertIn("user.relationship_profile_id", self.js)
+        self.assertIn('colspan="10"', self.html)
+        self.assertIn('colspan="10"', self.js)
+
+    def test_identity_editor_has_profile_and_initial_prior(self) -> None:
+        self.assertIn('id="relationship-profile-id"', self.html)
+        self.assertIn('id="initial-prior"', self.html)
+        self.assertIn('value="neutral"', self.html)
+        self.assertIn('value="acquainted"', self.html)
+        self.assertIn('value="fond"', self.html)
+        self.assertIn("default_relationship_profile", self.js)
+        self.assertIn("relationship_profiles", self.js)
+        self.assertIn("relationship_profile_id:", self.js)
+        self.assertIn("initial_prior:", self.js)
+
+    def test_account_memory_profile_is_editable(self) -> None:
+        self.assertIn('data-account="memory_profile_id"', self.js)
+
+    def test_partial_initial_prior_failure_is_reported(self) -> None:
+        self.assertIn("initial_prior?.requested", self.js)
+        self.assertIn("账号归属已保存，但初始关系未应用", self.js)
+
+    def test_page_assets_have_cache_stamp(self) -> None:
+        self.assertIn("style.css?v=0.6.0", self.html)
+        self.assertIn("app.js?v=0.6.0", self.html)
+
+    def test_legacy_profile_change_reports_restart_requirement(self) -> None:
+        self.assertIn("data.restart_required", self.js)
+        self.assertIn("旧数据归属需重启后生效", self.js)
+
+    def test_config_collector_only_submits_changed_non_boolean_values(self) -> None:
+        self.assertIn("Object.is(value, configValues[key])", self.js)
 
     def test_css_has_config_form_styles(self) -> None:
         self.assertIn(".config-form", self.css)

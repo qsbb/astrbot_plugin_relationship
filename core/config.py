@@ -9,10 +9,17 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping
 
+from .affect import AffectConfig
 from .affinity import AffinityConfig
 from .decay import DecayConfig
+from .dynamics import DynamicsConfig
 from .familiarity import FamiliarityConfig
 from .policy import PolicyConfig
+from .profiles import (
+    DEFAULT_PROFILE_ID,
+    normalize_profile_id,
+    parse_profile_mapping,
+)
 from .prompts import PromptConfig
 from .trust import TrustConfig
 
@@ -27,6 +34,16 @@ DEFAULTS: dict[str, Any] = {
     "MOOD_SILENCE_SCORE": 25,
     "MOOD_SILENCE_CHANCE_PERCENT": 45,
     "MOOD_MAX_CONSECUTIVE_SILENCES": 2,
+    "AFFECT_ENABLED": True,
+    "AFFECT_HALF_LIFE_SECONDS": 1800,
+    "AFFECT_POSITIVE_GAIN": 24,
+    "AFFECT_NEGATIVE_GAIN": 32,
+    "AFFECT_STANCE_THRESHOLD": 15,
+    "DYNAMICS_EARLY_BOOST": 0.25,
+    "DYNAMICS_EVIDENCE_HALF_LIFE": 12,
+    "RELATIONSHIP_DEFAULT_PROFILE_ID": DEFAULT_PROFILE_ID,
+    "RELATIONSHIP_LEGACY_PROFILE_ID": DEFAULT_PROFILE_ID,
+    "RELATIONSHIP_PERSONA_PROFILE_MAP": "",
     "AFFINITY_MESSAGE_GAIN": 0.2,
     "AFFINITY_PRAISE_GAIN": 1.5,
     "AFFINITY_HELP_RECEIVED_GAIN": 2.0,
@@ -136,6 +153,51 @@ def mood_kwargs(raw: Mapping[str, Any]) -> dict[str, int]:
             raw, "MOOD_MAX_CONSECUTIVE_SILENCES", minimum=0, maximum=100000
         ),
     }
+
+
+def affect_config(raw: Mapping[str, Any]) -> AffectConfig:
+    return AffectConfig(
+        enabled=_get_bool(raw, "AFFECT_ENABLED"),
+        half_life_seconds=_get_float(
+            raw, "AFFECT_HALF_LIFE_SECONDS", minimum=10.0, maximum=604800.0
+        ),
+        positive_gain=_get_float(
+            raw, "AFFECT_POSITIVE_GAIN", minimum=0.0, maximum=100.0
+        ),
+        negative_gain=_get_float(
+            raw, "AFFECT_NEGATIVE_GAIN", minimum=0.0, maximum=100.0
+        ),
+        stance_threshold=_get_float(
+            raw, "AFFECT_STANCE_THRESHOLD", minimum=0.0, maximum=100.0
+        ),
+    )
+
+
+def dynamics_config(raw: Mapping[str, Any]) -> DynamicsConfig:
+    return DynamicsConfig(
+        early_boost=_get_float(
+            raw, "DYNAMICS_EARLY_BOOST", minimum=0.0, maximum=1.0
+        ),
+        evidence_half_life=_get_float(
+            raw, "DYNAMICS_EVIDENCE_HALF_LIFE", minimum=0.1, maximum=10000.0
+        ),
+    )
+
+
+def relationship_default_profile_id(raw: Mapping[str, Any]) -> str:
+    return normalize_profile_id(
+        _get(raw, "RELATIONSHIP_DEFAULT_PROFILE_ID"), DEFAULT_PROFILE_ID
+    )
+
+
+def relationship_legacy_profile_id(raw: Mapping[str, Any]) -> str:
+    return normalize_profile_id(
+        _get(raw, "RELATIONSHIP_LEGACY_PROFILE_ID"), DEFAULT_PROFILE_ID
+    )
+
+
+def relationship_persona_profile_map(raw: Mapping[str, Any]) -> dict[str, str]:
+    return parse_profile_mapping(_get(raw, "RELATIONSHIP_PERSONA_PROFILE_MAP"))
 
 
 def _get_ids(raw: Mapping[str, Any], key: str) -> tuple[str, ...]:

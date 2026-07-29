@@ -54,7 +54,10 @@ class AffinityCalculator:
         self, event: InteractionEvent, state: UserRelationState, value: float
     ) -> tuple[float, str]:
         cfg = self._config
-        is_whitelisted = event.relationship_user_id in cfg.whitelist_user_ids
+        is_whitelisted = any(
+            value in cfg.whitelist_user_ids
+            for value in event.relationship_whitelist_ids
+        )
         if not is_whitelisted:
             remaining = max(0.0, cfg.non_whitelist_ceiling - state.affinity_score)
             return min(value, remaining), "非白名单语义事件受朋友区上限约束"
@@ -93,7 +96,10 @@ class AffinityCalculator:
 
         # 好感不是“聊得越多越高”的积分。非白名单用户保留在朋友区间，
         # 只有白名单且信任、熟悉度都达标，才允许跨入高好感区。
-        is_whitelisted = event.relationship_user_id in cfg.whitelist_user_ids
+        is_whitelisted = any(
+            value in cfg.whitelist_user_ids
+            for value in event.relationship_whitelist_ids
+        )
         if not is_whitelisted:
             remaining = max(0.0, cfg.non_whitelist_ceiling - state.affinity_score)
             if remaining <= 0:

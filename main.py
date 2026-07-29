@@ -35,26 +35,45 @@ from astrbot.api.star import Context, Star, StarTools, register
 from .core.affinity import AffinityCalculator
 from .core.config import (
     DEFAULTS,
+    affect_config,
     affinity_config,
     cross_platform_memory_enabled,
     cross_platform_memory_max_chars,
     cross_platform_memory_top_k,
     decay_config,
+    dynamics_config,
     familiarity_config,
     log_level,
     mood_enabled,
     mood_kwargs,
     policy_config,
     prompt_config,
+    relationship_default_profile_id,
+    relationship_legacy_profile_id,
+    relationship_persona_profile_map,
     save_interval_seconds,
     trust_config,
 )
 from .core.familiarity import FamiliarityCalculator
 from .core.identity_registry import IdentityRegistry, ResolvedIdentity
-from .core.manager import RelationshipStateManager
-from .core.models import InteractionEvent, RelationshipScope
+from .core.manager import INITIAL_RELATIONSHIP_PRIORS, RelationshipStateManager
+from .core.models import (
+    HIGH_TRUST_EVENT_SOURCES,
+    KIND_INITIAL_PRIOR,
+    SEMANTIC_KINDS,
+    SOURCE_DIRECT,
+    SOURCE_RULE,
+    SOURCE_VERIFIED,
+    InteractionEvent,
+    RelationshipScope,
+)
 from .core.mood import MoodTracker
 from .core.prompts import INJECT_MARKER, build_injection_block
+from .core.profiles import (
+    parse_state_key,
+    resolve_profile_id,
+    validate_profile_id,
+)
 from .core.repository import JsonRepository
 from .core.request_context import (
     OWNER_RELATIONSHIP,
@@ -68,7 +87,7 @@ from .core.request_context import (
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 
@@ -77,6 +96,10 @@ _CONFIG_STORE_NAME = "relationship-config.json"
 _BASELINE_KEY = "__astrbot_baseline__"
 RELATIONSHIP_SNAPSHOT_CONTRACT_NAME = "relationship.snapshot"
 RELATIONSHIP_SNAPSHOT_CONTRACT_VERSION = "1.0"
+RELATIONSHIP_EVENT_CONTRACT_NAME = "relationship.event"
+RELATIONSHIP_EVENT_CONTRACT_VERSION = "1.0"
+_PUBLIC_EVENT_SOURCES = frozenset({SOURCE_DIRECT, SOURCE_RULE, SOURCE_VERIFIED})
+_PUBLIC_EVENT_KINDS = tuple(sorted(SEMANTIC_KINDS - {KIND_INITIAL_PRIOR}))
 
 
 @register(
@@ -116,7 +139,14 @@ class RelationshipPlugin(Star):
             )
 
         merged = self._merged_config()
-        repository = JsonRepository(data_dir / "relationship_state.json")
+        self._default_profile_id = relationship_default_profile_id(merged)
+        self._legacy_profile_id = relationship_legacy_profile_id(merged)
+        self._persona_profile_map = relationship_persona_profile_map(merged)
+        self._session_profile_cache: dict[str, str] = {}
+        repository = JsonRepository(
+            data_dir / "relationship_state.json",
+            legacy_profile_id=self._legacy_profile_id,
+        )
         tracker = MoodTracker(**mood_kwargs(merged))
         self.manager = RelationshipStateManager(
             repository=repository,
@@ -126,6 +156,8 @@ class RelationshipPlugin(Star):
             familiarity=FamiliarityCalculator(familiarity_config(merged)),
             decay_config=decay_config(merged),
             policy_config=policy_config(merged),
+            affect_config=affect_config(merged),
+            dynamics_config=dynamics_config(merged),
             save_interval_seconds=save_interval_seconds(merged),
             mood_enabled=mood_enabled(merged),
             logger=self.logger,
@@ -167,14 +199,150 @@ class RelationshipPlugin(Star):
             "privacy": "derived_only",
         }
 
+    def relationship_event_contract(self) -> dict[str, object]:
+        """Declare the evidence-backed semantic event input contract."""
+        return {
+            "name": RELATIONSHIP_EVENT_CONTRACT_NAME,
+            "version": RELATIONSHIP_EVENT_CONTRACT_VERSION,
+            "plugin": PLUGIN_NAME,
+            "capabilities": ("submit_event",),
+            "event_kinds": _PUBLIC_EVENT_KINDS,
+            "sources": tuple(sorted(_PUBLIC_EVENT_SOURCES)),
+            "strength_range": (0.0, 1.0),
+            "requires_event_id": True,
+            "stores_message_text": False,
+        }
+
     async def get_relationship_snapshot(
-        self, bot_id: str, user_id: str, group_id: str | None = None
+        self,
+        bot_id: str,
+        user_id: str,
+        group_id: str | None = None,
+        relationship_profile_id: str | None = None,
+        person_id: str = "",
     ) -> dict[str, object]:
         """返回稳定、最小化且不含原始关系分数的跨插件快照。"""
+        profile_id = (
+            validate_profile_id(relationship_profile_id)
+            if relationship_profile_id
+            else self._default_profile_id
+        )
         snapshot = await self.manager.get_snapshot(
-            str(bot_id or ""), str(user_id or ""), str(group_id) if group_id else None
+            str(bot_id or ""),
+            str(user_id or ""),
+            str(group_id) if group_id else None,
+            relationship_profile_id=profile_id,
+            person_id=str(person_id or ""),
         )
         return self._snapshot_payload(snapshot)
+
+    async def submit_relationship_event(
+        self, payload: Mapping[str, Any]
+    ) -> dict[str, object]:
+        """Validate and record one `relationship.event@1.0` semantic fact."""
+        if not isinstance(payload, Mapping):
+            raise ValueError("INVALID_RELATIONSHIP_EVENT")
+        if str(payload.get("version") or RELATIONSHIP_EVENT_CONTRACT_VERSION) != (
+            RELATIONSHIP_EVENT_CONTRACT_VERSION
+        ):
+            raise ValueError("UNSUPPORTED_RELATIONSHIP_EVENT_VERSION")
+        bot_id = str(payload.get("bot_id") or "").strip()
+        user_id = str(payload.get("user_id") or "").strip()
+        event_id = str(payload.get("event_id") or "").strip()
+        kind = str(payload.get("kind") or "").strip()
+        source = str(payload.get("source") or "").strip()
+        if not bot_id or not user_id:
+            raise ValueError("RELATIONSHIP_EVENT_SCOPE_REQUIRED")
+        if not event_id:
+            raise ValueError("RELATIONSHIP_EVENT_ID_REQUIRED")
+        if kind not in _PUBLIC_EVENT_KINDS:
+            raise ValueError("RELATIONSHIP_EVENT_KIND_NOT_ALLOWED")
+        if source not in _PUBLIC_EVENT_SOURCES:
+            raise ValueError("RELATIONSHIP_EVENT_SOURCE_NOT_ALLOWED")
+
+        explicit_profile = str(payload.get("relationship_profile_id") or "").strip()
+        profile_id = (
+            validate_profile_id(explicit_profile)
+            if explicit_profile
+            else resolve_profile_id(
+                payload.get("persona_id"),
+                default_profile_id=self._default_profile_id,
+                mapping=self._persona_profile_map,
+            )
+        )
+        person_id = str(payload.get("person_id") or "").strip()
+        person = self.identity_registry.get(person_id) if person_id else None
+        if person_id and person is None:
+            raise ValueError("RELATIONSHIP_EVENT_PERSON_NOT_FOUND")
+        platform_id = str(payload.get("platform_id") or "").strip()
+        resolved = None
+        if platform_id:
+            resolved = self.identity_registry.resolve(
+                platform_candidates=(platform_id,),
+                user_id=user_id,
+                bot_id=bot_id,
+            )
+        elif person is None:
+            try:
+                resolved = self.identity_registry.resolve_unique_account(
+                    user_id=user_id,
+                    bot_id=bot_id,
+                )
+            except ValueError as exc:
+                raise ValueError("RELATIONSHIP_EVENT_IDENTITY_AMBIGUOUS") from exc
+
+        if person is not None:
+            if platform_id:
+                if resolved is None or resolved.person.person_id != person.person_id:
+                    raise ValueError("RELATIONSHIP_EVENT_SCOPE_MISMATCH")
+            elif not any(
+                account.user_id == user_id
+                and (not account.bot_id or account.bot_id == bot_id)
+                for account in person.accounts
+            ):
+                raise ValueError("RELATIONSHIP_EVENT_SCOPE_MISMATCH")
+        elif resolved is not None:
+            person = resolved.person
+        aliases = person.alias_state_keys_for(profile_id) if person else ()
+        refs = payload.get("evidence_refs")
+        evidence_refs = (
+            tuple(str(item).strip() for item in refs if str(item).strip())
+            if isinstance(refs, (list, tuple))
+            else ()
+        )
+        if kind in {"promise_kept", "promise_broken"}:
+            if source not in HIGH_TRUST_EVENT_SOURCES:
+                raise ValueError("RELATIONSHIP_EVENT_EVIDENCE_SOURCE_REQUIRED")
+            if source != SOURCE_DIRECT and not evidence_refs:
+                raise ValueError("RELATIONSHIP_EVENT_EVIDENCE_REQUIRED")
+        try:
+            timestamp = float(payload.get("timestamp") or time.time())
+            confidence = float(payload.get("confidence", 1.0))
+            severity = float(payload.get("severity", 1.0))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("RELATIONSHIP_EVENT_NUMBER_INVALID") from exc
+        interaction = InteractionEvent(
+            bot_id=bot_id,
+            user_id=user_id,
+            group_id=(str(payload.get("group_id")) if payload.get("group_id") else None),
+            text="",
+            timestamp=timestamp,
+            kind=kind,
+            event_id=event_id,
+            source=source,
+            confidence=confidence,
+            severity=severity,
+            dedupe_key=str(payload.get("dedupe_key") or event_id),
+            evidence_refs=evidence_refs,
+            person_id=person.person_id if person else person_id,
+            state_alias_keys=aliases,
+            relationship_profile_id=profile_id,
+        )
+        applied, reason = self.manager._validate_event(interaction)
+        if not applied:
+            raise ValueError(f"RELATIONSHIP_EVENT_REJECTED:{reason}")
+        snapshot = await self.manager.record(interaction)
+        return {"accepted": True, "snapshot": self._snapshot_payload(snapshot)}
 
     def _snapshot_payload(self, snapshot: Any) -> dict[str, object]:
         """把内部状态压缩成可写入请求上下文的派生字段。"""
@@ -240,7 +408,8 @@ class RelationshipPlugin(Star):
         request_context = ensure_context(event, PHASE_LLM_REQUEST)
 
         text = plugin._get_text(event)
-        scope = plugin._get_scope(event)
+        profile_id = await plugin._resolve_relationship_profile(event, req)
+        scope = plugin._get_scope(event, profile_id)
         if not scope.bot_id or not scope.user_id:
             return
         kind = "command" if text.lstrip().startswith("/") else "message"
@@ -255,6 +424,7 @@ class RelationshipPlugin(Star):
             source="platform_message",
             person_id=scope.person_id,
             state_alias_keys=scope.state_alias_keys,
+            relationship_profile_id=scope.relationship_profile_id,
         )
 
         # 即使关闭短期情绪，也继续记录长期关系；Manager 内部会跳过 mood 累积。
@@ -337,6 +507,15 @@ class RelationshipPlugin(Star):
         resolved = plugin._resolve_identity(event)
         if resolved is None or len(resolved.person.accounts) < 2:
             return
+        profile_id = await plugin._resolve_relationship_profile(event, req)
+        if plugin._account_memory_profile(resolved.account) != profile_id:
+            request_context = ensure_context(event, PHASE_LLM_REQUEST)
+            add_reason(
+                request_context,
+                OWNER_RELATIONSHIP,
+                "CROSS_PLATFORM_MEMORY_PROFILE_MISMATCH",
+            )
+            return
 
         request_context = ensure_context(event, PHASE_LLM_REQUEST)
         bridge = plugin._memory_companion_bridge()
@@ -355,6 +534,8 @@ class RelationshipPlugin(Star):
         for account in resolved.person.accounts:
             if account.key == resolved.account.key or remaining < 80:
                 continue
+            if plugin._account_memory_profile(account) != profile_id:
+                continue
             session_id = account.session_id or (
                 f"{account.platform_id}:FriendMessage:{account.user_id}"
             )
@@ -368,6 +549,7 @@ class RelationshipPlugin(Star):
                         "user_id": account.user_id,
                         "bot_id": account.bot_id,
                         "message_text": query,
+                        "relationship_profile_id": profile_id,
                     },
                     top_k=plugin._cross_platform_memory_top_k,
                     max_chars=remaining,
@@ -408,6 +590,7 @@ class RelationshipPlugin(Star):
             source="astrbot_plugin_memory_companion",
             metadata={
                 "queried_accounts": queried_accounts,
+                "relationship_profile_id": profile_id,
             },
         )
         if not plugin._inject_text(req, block):
@@ -425,6 +608,7 @@ class RelationshipPlugin(Star):
                 "queried_accounts": queried_accounts,
                 "injected_chars": len(block),
                 "provider": "astrbot_plugin_memory_companion",
+                "relationship_profile_id": profile_id,
             },
         )
         add_reason(
@@ -562,17 +746,28 @@ class RelationshipPlugin(Star):
             )
             if (person := self.identity_registry.get(person_id)) is not None
         }
+        profile_ids = set(self._known_relationship_profiles())
         alias_state_keys = {
-            key for person in persons.values() for key in person.alias_state_keys
+            key
+            for person in persons.values()
+            for profile_id in profile_ids
+            for key in person.alias_state_keys_for(profile_id)
         }
         for key, state in states.items():
             if key in alias_state_keys:
                 continue
-            user_id = key.rsplit(":user:", 1)[-1]
-            person = persons.get(user_id) if key.startswith("person:user:") else None
+            parsed = parse_state_key(key)
+            if parsed is None:
+                continue
+            profile_id = parsed["profile_id"]
+            user_id = parsed.get("person_id") or parsed.get("user_id") or ""
+            person = persons.get(user_id) if parsed["kind"] == "person" else None
+            whitelist_ids = {user_id, f"{profile_id}/{user_id}"}
+            whitelisted = bool(whitelist_ids.intersection(whitelist))
             users.append(
                 {
                     "user_id": user_id,
+                    "relationship_profile_id": profile_id,
                     "display_name": person.display_name if person else "",
                     "linked_accounts": len(person.accounts) if person else 1,
                     "affinity": round(state.affinity_score, 1),
@@ -580,10 +775,10 @@ class RelationshipPlugin(Star):
                     "familiarity": round(state.familiarity_score, 1),
                     "interaction_count": state.interaction_count,
                     "band": self._relation_band(state.affinity_score),
-                    "whitelisted": user_id in whitelist,
+                    "whitelisted": whitelisted,
                     "boundary": "开放"
                     if (
-                        user_id in whitelist
+                        whitelisted
                         and state.affinity_score
                         >= self._affinity_config.high_affinity_threshold
                         and state.trust_score
@@ -609,6 +804,7 @@ class RelationshipPlugin(Star):
                 "trust_gate": self._affinity_config.whitelist_trust_gate,
                 "familiarity_gate": self._affinity_config.whitelist_familiarity_gate,
                 "whitelist_count": len(whitelist),
+                "profile_count": len({item["relationship_profile_id"] for item in users}),
             },
             "summary": {
                 "user_count": len(users),
@@ -722,8 +918,22 @@ class RelationshipPlugin(Star):
         }
         return json_response(payload) if json_response else payload
 
+    def _known_relationship_profiles(self) -> tuple[str, ...]:
+        profile_ids = {
+            self._default_profile_id,
+            self._legacy_profile_id,
+            *self._persona_profile_map.values(),
+            *self._session_profile_cache.values(),
+        }
+        for key in getattr(self.manager, "_states", {}):
+            parsed = parse_state_key(key)
+            if parsed is not None:
+                profile_ids.add(parsed["profile_id"])
+        return tuple(sorted(profile_ids))
+
     async def _page_identities(self):
         bridge = self._memory_companion_bridge()
+        profile_ids = self._known_relationship_profiles()
         payload = {
             "success": True,
             "persons": self.identity_registry.list_persons(),
@@ -731,6 +941,9 @@ class RelationshipPlugin(Star):
                 "available": callable(getattr(bridge, "compose_injection", None)),
                 "mode": "read_only_bridge",
             },
+            "relationship_profiles": profile_ids,
+            "default_relationship_profile": self._default_profile_id,
+            "initial_prior_options": ("neutral", "acquainted", "fond"),
         }
         return json_response(payload) if json_response else payload
 
@@ -739,25 +952,96 @@ class RelationshipPlugin(Star):
         if not isinstance(data, dict):
             payload = {"success": False, "error": "INVALID_JSON_PAYLOAD"}
             return json_response(payload, status=400) if json_response else payload
+        identity_before = self.identity_registry.snapshot()
+        identity_saved = False
         try:
+            requested_profile = str(
+                data.get("relationship_profile_id") or self._default_profile_id
+            ).strip()
+            requested_profile = validate_profile_id(requested_profile)
+            initial_prior = str(data.get("initial_prior") or "").strip().lower()
+            if initial_prior and initial_prior not in INITIAL_RELATIONSHIP_PRIORS:
+                raise ValueError("INVALID_INITIAL_PRIOR")
             person = self.identity_registry.upsert(data)
-            merged = await self.manager.bind_identity(
-                person.relationship_key, person.alias_state_keys
+            identity_saved = True
+            profile_ids = set(self._known_relationship_profiles()) | {
+                requested_profile,
+            }
+            profile_bindings = tuple(
+                (
+                    profile_id,
+                    person.relationship_key_for(profile_id),
+                    person.alias_state_keys_for(profile_id),
+                )
+                for profile_id in sorted(profile_ids)
             )
+            changed_keys = set(
+                await self.manager.bind_identities(
+                    tuple(
+                        (relationship_key, alias_keys)
+                        for _, relationship_key, alias_keys in profile_bindings
+                    )
+                )
+            )
+            merged_profiles = [
+                profile_id
+                for profile_id, relationship_key, _ in profile_bindings
+                if relationship_key in changed_keys
+            ]
         except ValueError as exc:
             payload = {"success": False, "error": str(exc) or "INVALID_IDENTITY"}
             return json_response(payload, status=400) if json_response else payload
-        except OSError as exc:
+        except Exception as exc:
+            rollback_error = None
+            if identity_saved:
+                try:
+                    self.identity_registry.restore(identity_before)
+                except OSError as restore_exc:
+                    rollback_error = restore_exc
             payload = {
                 "success": False,
-                "error": "IDENTITY_PERSIST_FAILED",
-                "detail": str(exc) or type(exc).__name__,
+                "error": (
+                    "IDENTITY_ROLLBACK_FAILED"
+                    if rollback_error is not None
+                    else (
+                        "RELATIONSHIP_PERSIST_FAILED"
+                        if identity_saved
+                        else "IDENTITY_PERSIST_FAILED"
+                    )
+                ),
+                "detail": (
+                    f"{exc}; rollback: {rollback_error}"
+                    if rollback_error is not None
+                    else (str(exc) or type(exc).__name__)
+                ),
             }
             return json_response(payload, status=500) if json_response else payload
+        prior_result: dict[str, object] = {"requested": False, "applied": False}
+        if initial_prior:
+            anchor = person.accounts[0]
+            scope = RelationshipScope(
+                bot_id=anchor.bot_id,
+                user_id=anchor.user_id,
+                person_id=person.person_id,
+                state_alias_keys=person.alias_state_keys_for(requested_profile),
+                relationship_profile_id=requested_profile,
+            )
+            prior_result["requested"] = True
+            try:
+                await self.manager.apply_initial_prior(scope, initial_prior)
+                prior_result["applied"] = True
+                prior_result["level"] = initial_prior
+            except ValueError as exc:
+                prior_result["error"] = str(exc) or "INITIAL_PRIOR_REJECTED"
+            except OSError:
+                prior_result["error"] = "INITIAL_PRIOR_PERSIST_FAILED"
         payload = {
             "success": True,
             "person": person.as_dict(),
-            "state_merged": merged,
+            "state_merged": bool(merged_profiles),
+            "merged_profiles": merged_profiles,
+            "relationship_profile_id": requested_profile,
+            "initial_prior": prior_result,
         }
         return json_response(payload) if json_response else payload
 
@@ -790,6 +1074,7 @@ class RelationshipPlugin(Star):
             payload = {"success": False, "error": "INVALID_JSON_PAYLOAD"}
             return json_response(payload, status=400) if json_response else payload
         schema = self._schema()
+        current_config = self._public_config()
         changes: dict[str, Any] = {}
         errors: dict[str, str] = {}
         for key, value in data.items():
@@ -797,12 +1082,21 @@ class RelationshipPlugin(Star):
                 errors[key] = "UNKNOWN_FIELD"
                 continue
             try:
-                changes[key] = self._coerce_page_value(key, value, schema[key])
+                coerced = self._coerce_page_value(key, value, schema[key])
+                if coerced != current_config.get(key):
+                    changes[key] = coerced
             except (TypeError, ValueError):
                 errors[key] = "INVALID_VALUE"
         if errors:
             payload = {"success": False, "error": "VALIDATION_FAILED", "fields": errors}
             return json_response(payload, status=400) if json_response else payload
+        if not changes:
+            payload = {
+                "success": True,
+                "config": current_config,
+                "restart_required": False,
+            }
+            return json_response(payload) if json_response else payload
 
         updated_overrides = {**self._config_overrides, **changes}
 
@@ -844,12 +1138,21 @@ class RelationshipPlugin(Star):
         payload = {
             "success": True,
             "config": self._public_config(),
-            "restart_required": False,
+            "restart_required": "RELATIONSHIP_LEGACY_PROFILE_ID" in changes,
         }
         return json_response(payload) if json_response else payload
 
     def _apply_runtime_config(self) -> None:
         merged = self._merged_config()
+        default_profile_id = relationship_default_profile_id(merged)
+        persona_profile_map = relationship_persona_profile_map(merged)
+        if (
+            default_profile_id != self._default_profile_id
+            or persona_profile_map != self._persona_profile_map
+        ):
+            self._session_profile_cache.clear()
+        self._default_profile_id = default_profile_id
+        self._persona_profile_map = persona_profile_map
         self._mood_enabled = mood_enabled(merged)
         self._affinity_config = affinity_config(merged)
         self._prompt_config = prompt_config(merged)
@@ -864,6 +1167,8 @@ class RelationshipPlugin(Star):
             familiarity_config=familiarity_config(merged),
             decay_config=decay_config(merged),
             policy_config=policy_config(merged),
+            affect_config=affect_config(merged),
+            dynamics_config=dynamics_config(merged),
             save_interval_seconds=save_interval_seconds(merged),
         )
         self._apply_log_level()
@@ -973,17 +1278,17 @@ class RelationshipPlugin(Star):
     async def rel_status(self, event: AstrMessageEvent):
         """查看当前用户/会话的关系状态快照。"""
         plugin = RelationshipPlugin._current_instance or self
-        scope = plugin._get_scope(event)
+        profile_id = await plugin._resolve_relationship_profile(event)
+        scope = plugin._get_scope(event, profile_id)
         if not scope.bot_id or not scope.user_id:
             yield event.plain_result("无法识别当前用户或 bot 身份。")
             return
-        snapshot = await plugin.manager.get_snapshot(
-            scope.bot_id, scope.user_id, scope.group_id
-        )
+        snapshot = await plugin.manager.get_snapshot_for_scope(scope)
         mood_names = {"normal": "平常", "lazy": "慵懒", "annoyed": "烦躁"}
         lines = [
             f"凝心溯溪-情 v{__version__}",
             f"当前会话: {'私聊' if scope.is_private else '群聊'}",
+            f"关系人格: {scope.relationship_profile_id}",
             f"情绪: {mood_names.get(snapshot.mood, snapshot.mood)}",
             f"回复意愿: {snapshot.willingness}/100",
             f"好感: {snapshot.affinity}/100",
@@ -998,7 +1303,8 @@ class RelationshipPlugin(Star):
     async def rel_reset(self, event: AstrMessageEvent):
         """重置当前会话情绪与当前用户的长期关系。"""
         plugin = RelationshipPlugin._current_instance or self
-        scope = plugin._get_scope(event)
+        profile_id = await plugin._resolve_relationship_profile(event)
+        scope = plugin._get_scope(event, profile_id)
         if not scope.bot_id or not scope.user_id:
             yield event.plain_result("无法识别当前用户或 bot 身份。")
             return
@@ -1080,20 +1386,97 @@ class RelationshipPlugin(Star):
             bot_id=self._safe_event_id(event, "get_self_id"),
         )
 
-    def _get_scope(self, event: AstrMessageEvent) -> RelationshipScope:
+    async def _resolve_relationship_profile(
+        self, event: AstrMessageEvent, req: Any = None
+    ) -> str:
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        conversation = getattr(req, "conversation", None)
+        persona_id = str(getattr(conversation, "persona_id", "") or "").strip()
+        manager = getattr(self.context, "persona_manager", None)
+        resolver = getattr(manager, "resolve_selected_persona", None)
+        if callable(resolver):
+            try:
+                result = resolver(
+                    umo=str(getattr(event, "unified_msg_origin", "") or ""),
+                    conversation_persona_id=persona_id or None,
+                    platform_name=self._safe_event_id(event, "get_platform_name"),
+                    provider_settings={
+                        "default_personality": str(
+                            getattr(manager, "default_persona", "") or ""
+                        )
+                    },
+                )
+                if hasattr(result, "__await__"):
+                    result = await result
+                if isinstance(result, tuple) and result:
+                    persona_id = str(result[0] or persona_id).strip()
+                elif isinstance(result, str):
+                    persona_id = result.strip() or persona_id
+                elif result is not None:
+                    persona_id = str(
+                        getattr(result, "persona_id", "")
+                        or getattr(result, "id", "")
+                        or persona_id
+                    ).strip()
+            except Exception as exc:
+                self.logger.debug(
+                    "[relationship] resolve selected persona failed: %s", exc
+                )
+        cached_profile = self._session_profile_cache.get(umo) if umo else None
+        profile_id = (
+            resolve_profile_id(
+                persona_id,
+                default_profile_id=self._default_profile_id,
+                mapping=self._persona_profile_map,
+            )
+            if persona_id
+            else cached_profile or self._default_profile_id
+        )
+        if umo and persona_id:
+            self._session_profile_cache[umo] = profile_id
+            if len(self._session_profile_cache) > 2048:
+                self._session_profile_cache.pop(next(iter(self._session_profile_cache)))
+        return profile_id
+
+    def _get_scope(
+        self,
+        event: AstrMessageEvent,
+        relationship_profile_id: str | None = None,
+    ) -> RelationshipScope:
         bot_id = self._safe_event_id(event, "get_self_id")
         user_id = self._safe_event_id(event, "get_sender_id")
         group_id = self._safe_event_id(event, "get_group_id") or None
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        profile_id = resolve_profile_id(
+            "",
+            default_profile_id=(
+                relationship_profile_id
+                or self._session_profile_cache.get(umo)
+                or self._default_profile_id
+            ),
+        )
         resolved = self._resolve_identity(event)
         if resolved is None:
-            return RelationshipScope(bot_id=bot_id, user_id=user_id, group_id=group_id)
+            return RelationshipScope(
+                bot_id=bot_id,
+                user_id=user_id,
+                group_id=group_id,
+                relationship_profile_id=profile_id,
+            )
         return RelationshipScope(
             bot_id=bot_id,
             user_id=user_id,
             group_id=group_id,
             person_id=resolved.person.person_id,
-            state_alias_keys=resolved.person.alias_state_keys,
+            state_alias_keys=resolved.person.alias_state_keys_for(profile_id),
+            relationship_profile_id=profile_id,
         )
+
+    def _account_memory_profile(self, account: Any) -> str:
+        configured = str(getattr(account, "memory_profile_id", "") or "").strip()
+        if configured:
+            return resolve_profile_id(configured)
+        return self._default_profile_id
 
     @staticmethod
     def _memory_companion_bridge() -> Any:
