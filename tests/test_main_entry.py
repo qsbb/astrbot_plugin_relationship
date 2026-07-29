@@ -134,6 +134,7 @@ class FakeEvent:
         group_id: str | None = None,
         message_id: str = "msg-1",
         platform_id: str = "qq-main",
+        sender_name: str = "测试用户",
     ) -> None:
         self._text = text
         self._bot_id = bot_id
@@ -141,6 +142,7 @@ class FakeEvent:
         self._group_id = group_id
         self._message_id = message_id
         self._platform_id = platform_id
+        self._sender_name = sender_name
         self.unified_msg_origin = (
             f"{platform_id}:GroupMessage:{group_id}"
             if group_id
@@ -167,6 +169,9 @@ class FakeEvent:
 
     def get_platform_name(self) -> str:
         return self._platform_id
+
+    def get_sender_name(self) -> str:
+        return self._sender_name
 
     @staticmethod
     def plain_result(text: str) -> str:
@@ -607,8 +612,35 @@ class MainEntryTest(unittest.TestCase):
         self.assertEqual(payload["plugin"]["version"], main.__version__)
         self.assertEqual(payload["summary"]["user_count"], 1)
         self.assertEqual(payload["users"][0]["user_id"], "user-1")
+        self.assertEqual(payload["users"][0]["scope_kind"], "account")
+        self.assertEqual(payload["users"][0]["person_id"], "")
+        self.assertEqual(payload["users"][0]["display_name"], "测试用户")
         self.assertEqual(payload["users"][0]["relationship_profile_id"], "default")
+        self.assertEqual(
+            payload["users"][0]["quick_account"],
+            {
+                "platform_id": "qq-main",
+                "user_id": "user-1",
+                "bot_id": "bot-1",
+                "session_id": "qq-main:FriendMessage:user-1",
+                "display_name": "测试用户",
+                "complete": True,
+            },
+        )
         self.assertIn(payload["users"][0]["boundary"], ("开放", "谨慎"))
+
+    def test_group_observation_does_not_prefill_group_umo(self) -> None:
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(sender_id="group-user", group_id="group-1"), object()
+            )
+        )
+
+        observation = self.plugin.account_observations.get("bot-1", "group-user")
+
+        self.assertIsNotNone(observation)
+        self.assertEqual(observation["platform_id"], "qq-main")
+        self.assertEqual(observation["session_id"], "")
 
     def _save_identity(self, body: dict) -> dict:
         async def fake_request_json():
@@ -717,6 +749,10 @@ class MainEntryTest(unittest.TestCase):
         canonical_key = "persona:default:person:summer"
         canonical = self.plugin.manager._states[canonical_key]
         self.assertEqual(canonical.interaction_count, 2)
+        overview = _run(self.plugin._page_overview())
+        self.assertEqual(overview["users"][0]["scope_kind"], "person")
+        self.assertEqual(overview["users"][0]["person_id"], "summer")
+        self.assertIsNone(overview["users"][0]["quick_account"])
         self.assertNotIn(
             "persona:default:account:bot-1:user:user-1",
             self.plugin.manager._states,

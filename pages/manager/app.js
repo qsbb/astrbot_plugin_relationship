@@ -21,6 +21,7 @@ const CONFIG_GROUPS = [
 let configSchema = {};
 let configValues = {};
 let identities = [];
+let overviewUsers = [];
 let relationshipProfiles = ["default"];
 let defaultRelationshipProfile = "default";
 
@@ -113,13 +114,14 @@ function render(payload) {
   )).join("");
 
   const users = payload?.users || [];
+  overviewUsers = users;
   const tbody = $("#relation-tbody");
   if (!users.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">暂无关系记录</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">暂无关系记录</td></tr>';
     return;
   }
 
-  tbody.innerHTML = users.map((user) => (
+  tbody.innerHTML = users.map((user, index) => (
     `<tr><td>${escapeHtml(user.display_name || user.user_id)}`
     + `${user.display_name ? `<small class="user-id">${escapeHtml(user.user_id)} · ${user.linked_accounts} 个账号</small>` : ""}</td>`
     + `<td><code class="profile-id">${escapeHtml(user.relationship_profile_id || defaultRelationshipProfile)}</code></td>`
@@ -127,7 +129,9 @@ function render(payload) {
     + `<td>${user.affinity}</td><td>${user.trust}</td><td>${user.familiarity}</td><td>${user.interaction_count}</td>`
     + `<td>${user.whitelisted ? '<span class="badge ok">白名单</span>' : '<span class="badge">普通</span>'}</td>`
     + `<td>${user.boundary === "开放" ? '<span class="badge safe">开放</span>' : '<span class="badge warn">谨慎</span>'}</td>`
-    + `<td>${formatTime(user.last_event_at)}</td></tr>`
+    + `<td>${formatTime(user.last_event_at)}</td>`
+    + `<td><button type="button" class="quick-edit-command" data-quick-edit="${index}">`
+    + `${user.person_id ? "编辑归属" : "快速归属"}</button></td></tr>`
   )).join("");
 }
 
@@ -138,7 +142,7 @@ async function load() {
     render(await apiGet("overview"));
   } catch (error) {
     toast(`加载关系状态失败：${error?.message || String(error)}`, true);
-    $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="10">加载失败</td></tr>';
+    $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="11">加载失败</td></tr>';
   } finally {
     if (button) button.disabled = false;
   }
@@ -263,13 +267,13 @@ function accountRow(account = {}) {
     + `<label>UID<input data-account="user_id" type="text" maxlength="120" value="${escapeHtml(account.user_id || "")}" /></label>`
     + `<label>Bot ID<input data-account="bot_id" type="text" maxlength="120" value="${escapeHtml(account.bot_id || "")}" /></label>`
     + `<label>UMO<input data-account="session_id" type="text" maxlength="240" value="${escapeHtml(account.session_id || "")}" /></label>`
-    + `<label>关系人格 ID<input data-account="memory_profile_id" type="text" maxlength="64" value="${escapeHtml(account.memory_profile_id || "")}" placeholder="留空使用默认人格" /></label>`
+    + `<label>记忆人格 ID<input data-account="memory_profile_id" type="text" maxlength="64" value="${escapeHtml(account.memory_profile_id || "")}" placeholder="留空使用默认人格" /></label>`
     + `<label>备注<input data-account="label" type="text" maxlength="80" value="${escapeHtml(account.label || "")}" /></label>`
     + `<button type="button" class="remove-account icon-command danger-command" title="移除账号" aria-label="移除账号">×</button>`
     + `</div>`;
 }
 
-function resetIdentityEditor(accountCount = 2) {
+function resetIdentityEditor(accountCount = 1) {
   $("#identity-editor-title").textContent = "新建自然人";
   $("#person-display-name").value = "";
   $("#person-id").value = "";
@@ -287,6 +291,54 @@ function editIdentity(person) {
   renderRelationshipProfileOptions(person.relationship_profile_id || defaultRelationshipProfile);
   $("#initial-prior").value = "";
   $("#account-list").innerHTML = (person.accounts || []).map(accountRow).join("") || accountRow();
+}
+
+function activateTab(target) {
+  document.querySelectorAll(".tabs button[data-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.tab === target);
+  });
+  document.querySelectorAll(".panel[data-panel]").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.panel === target);
+  });
+}
+
+async function quickEditRelationship(index) {
+  const user = overviewUsers[index];
+  if (!user) return;
+  activateTab("identities");
+
+  if (user.person_id) {
+    let person = identities.find((item) => item.person_id === user.person_id);
+    if (!person) {
+      await loadIdentities();
+      person = identities.find((item) => item.person_id === user.person_id);
+    }
+    if (!person) {
+      toast("未找到该自然人的账号归属，请刷新后重试", true);
+      return;
+    }
+    editIdentity(person);
+    document.querySelector(".identity-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+
+  const account = user.quick_account || {};
+  $("#identity-editor-title").textContent = "从关系记录创建账号归属";
+  $("#person-display-name").value = account.display_name || user.user_id || "";
+  $("#person-id").value = "";
+  $("#person-id").readOnly = false;
+  renderRelationshipProfileOptions(user.relationship_profile_id || defaultRelationshipProfile);
+  $("#initial-prior").value = "";
+  $("#account-list").innerHTML = accountRow(account);
+
+  const missing = [];
+  if (!account.platform_id) missing.push("平台 ID");
+  if (!account.bot_id) missing.push("Bot ID");
+  if (!account.session_id) missing.push("私聊 UMO");
+  toast(missing.length
+    ? `已填入可确认字段；缺少${missing.join("、")}，请先私聊 Bot 一次后刷新`
+    : "已自动填入最近一次真实私聊的账号信息，请确认后保存");
+  document.querySelector(".identity-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderRelationshipProfileOptions(selectedProfile) {
@@ -413,14 +465,7 @@ function initIdentityEditor() {
 
 function initTabs() {
   document.querySelectorAll(".tabs button[data-tab]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const target = btn.dataset.tab;
-      document.querySelectorAll(".tabs button[data-tab]").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".panel[data-panel]").forEach((p) => p.classList.remove("active"));
-      btn.classList.add("active");
-      const panel = document.querySelector(`.panel[data-panel="${target}"]`);
-      if (panel) panel.classList.add("active");
-    });
+    btn.addEventListener("click", () => activateTab(btn.dataset.tab));
   });
 }
 
@@ -435,6 +480,10 @@ async function init() {
   $("#btn-refresh").addEventListener("click", load);
   $("#btn-save-config").addEventListener("click", saveConfig);
   $("#btn-reset-config").addEventListener("click", resetConfigForm);
+  $("#relation-tbody").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-quick-edit]");
+    if (button) quickEditRelationship(Number(button.dataset.quickEdit));
+  });
   await load();
   await loadConfig();
   await loadIdentities();
@@ -442,5 +491,5 @@ async function init() {
 
 init().catch((error) => {
   toast(`页面启动失败：${error?.message || String(error)}`, true);
-  $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="10">页面启动失败</td></tr>';
+  $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="11">页面启动失败</td></tr>';
 });

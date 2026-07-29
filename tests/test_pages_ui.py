@@ -74,8 +74,15 @@ class PagesUiTest(unittest.TestCase):
     def test_overview_shows_relationship_profile(self) -> None:
         self.assertIn("关系人格", self.html)
         self.assertIn("user.relationship_profile_id", self.js)
-        self.assertIn('colspan="10"', self.html)
-        self.assertIn('colspan="10"', self.js)
+        self.assertIn('colspan="11"', self.html)
+        self.assertIn('colspan="11"', self.js)
+
+    def test_overview_has_quick_identity_editor(self) -> None:
+        self.assertIn("<th>操作</th>", self.html)
+        self.assertIn('data-quick-edit="${index}"', self.js)
+        self.assertIn("async function quickEditRelationship(", self.js)
+        self.assertIn('activateTab("identities")', self.js)
+        self.assertIn("请先私聊 Bot 一次后刷新", self.js)
 
     def test_identity_editor_has_profile_and_initial_prior(self) -> None:
         self.assertIn('id="relationship-profile-id"', self.html)
@@ -90,14 +97,16 @@ class PagesUiTest(unittest.TestCase):
 
     def test_account_memory_profile_is_editable(self) -> None:
         self.assertIn('data-account="memory_profile_id"', self.js)
+        self.assertIn("记忆人格 ID", self.js)
+        self.assertNotIn("<label>关系人格 ID", self.js)
 
     def test_partial_initial_prior_failure_is_reported(self) -> None:
         self.assertIn("initial_prior?.requested", self.js)
         self.assertIn("账号归属已保存，但初始关系未应用", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.6.1", self.html)
-        self.assertIn("app.js?v=0.6.1", self.html)
+        self.assertIn("style.css?v=0.6.2", self.html)
+        self.assertIn("app.js?v=0.6.2", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)
@@ -117,6 +126,7 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn(".identity-grid", self.css)
         self.assertIn(".account-row", self.css)
         self.assertIn(".identity-item", self.css)
+        self.assertIn(".quick-edit-command", self.css)
 
 
 if __name__ == "__main__":

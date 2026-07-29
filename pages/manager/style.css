@@ -198,7 +198,7 @@ button:disabled { cursor: wait; opacity: .55; }
 
 .table-card { padding-bottom: 8px; }
 .table-wrap { overflow: auto; margin: 16px -22px 0; }
-table { width: 100%; min-width: 900px; border-collapse: collapse; }
+table { width: 100%; min-width: 1010px; border-collapse: collapse; }
 th,
 td {
   padding: 13px 16px;
@@ -222,6 +222,12 @@ tbody tr:hover { background: rgba(93, 214, 192, .045); }
 .badge.ok,
 .badge.safe { color: var(--accent); background: rgba(93, 214, 192, .12); }
 .badge.warn { color: var(--warn); background: rgba(255, 184, 107, .12); }
+.quick-edit-command {
+  padding: 7px 10px;
+  border-radius: 8px;
+  color: var(--accent);
+  white-space: nowrap;
+}
 
 #toast {
   position: fixed;

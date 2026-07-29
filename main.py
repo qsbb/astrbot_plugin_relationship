@@ -33,6 +33,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
 from .core.affinity import AffinityCalculator
+from .core.account_observations import AccountObservationStore
 from .core.config import (
     DEFAULTS,
     affect_config,
@@ -87,7 +88,7 @@ from .core.request_context import (
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 
@@ -132,6 +133,9 @@ class RelationshipPlugin(Star):
         data_dir.mkdir(parents=True, exist_ok=True)
         self._data_dir = data_dir
         self.identity_registry = IdentityRegistry(data_dir / "identity_registry.json")
+        self.account_observations = AccountObservationStore(
+            data_dir / "account_observations.json"
+        )
         overrides, baseline = self._config_store_read()
         self._config_overrides: dict[str, Any] = overrides
         self._config_baseline: dict[str, Any] = baseline
@@ -184,6 +188,8 @@ class RelationshipPlugin(Star):
             "config_ready": isinstance(getattr(self, "_raw_config", None), dict),
             "data_dir_ready": getattr(self, "_data_dir", None) is not None,
             "identity_registry_ready": getattr(self, "identity_registry", None)
+            is not None,
+            "account_observations_ready": getattr(self, "account_observations", None)
             is not None,
         }
         reasons = [name.upper() for name, passed in checks.items() if not passed]
@@ -496,6 +502,7 @@ class RelationshipPlugin(Star):
         scope = plugin._get_scope(event, profile_id)
         if not scope.bot_id or not scope.user_id:
             return
+        plugin._record_account_observation(event, scope, profile_id)
         kind = "command" if text.lstrip().startswith("/") else "message"
         interaction = InteractionEvent(
             bot_id=scope.bot_id,
@@ -846,13 +853,39 @@ class RelationshipPlugin(Star):
             profile_id = parsed["profile_id"]
             user_id = parsed.get("person_id") or parsed.get("user_id") or ""
             person = persons.get(user_id) if parsed["kind"] == "person" else None
+            bot_id = parsed.get("bot_id") or ""
+            observation = (
+                self.account_observations.get(bot_id, user_id)
+                if parsed["kind"] == "account"
+                else None
+            )
+            quick_account = None
+            if parsed["kind"] == "account":
+                quick_account = {
+                    "platform_id": str((observation or {}).get("platform_id") or ""),
+                    "user_id": user_id,
+                    "bot_id": bot_id,
+                    "session_id": str((observation or {}).get("session_id") or ""),
+                    "display_name": str((observation or {}).get("display_name") or ""),
+                    "complete": bool(
+                        (observation or {}).get("platform_id")
+                        and (observation or {}).get("session_id")
+                    ),
+                }
             whitelist_ids = {user_id, f"{profile_id}/{user_id}"}
             whitelisted = bool(whitelist_ids.intersection(whitelist))
             users.append(
                 {
                     "user_id": user_id,
+                    "scope_kind": parsed["kind"],
+                    "person_id": person.person_id if person else "",
+                    "quick_account": quick_account,
                     "relationship_profile_id": profile_id,
-                    "display_name": person.display_name if person else "",
+                    "display_name": (
+                        person.display_name
+                        if person
+                        else str((observation or {}).get("display_name") or "")
+                    ),
                     "linked_accounts": len(person.accounts) if person else 1,
                     "affinity": round(state.affinity_score, 1),
                     "trust": round(state.trust_score, 1),
@@ -1460,6 +1493,37 @@ class RelationshipPlugin(Star):
         if umo and ":" in umo:
             values.append(umo.split(":", 1)[0])
         return tuple(dict.fromkeys(value for value in values if value))
+
+    @staticmethod
+    def _private_umo(event: AstrMessageEvent) -> str:
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        parts = umo.split(":", 2)
+        if (
+            len(parts) == 3
+            and all(part.strip() for part in parts)
+            and parts[1].casefold() in _PRIVATE_UMO_MESSAGE_TYPES
+        ):
+            return umo
+        return ""
+
+    def _record_account_observation(
+        self,
+        event: AstrMessageEvent,
+        scope: RelationshipScope,
+        relationship_profile_id: str,
+    ) -> None:
+        platforms = self._platform_candidates(event)
+        try:
+            self.account_observations.record(
+                bot_id=scope.bot_id,
+                user_id=scope.user_id,
+                platform_id=platforms[0] if platforms else "",
+                private_umo=self._private_umo(event),
+                display_name=self._safe_event_id(event, "get_sender_name"),
+                relationship_profile_id=relationship_profile_id,
+            )
+        except OSError as exc:
+            self.logger.debug("[relationship] 记录账号快捷信息失败: %s", exc)
 
     def _resolve_identity(self, event: AstrMessageEvent) -> ResolvedIdentity | None:
         return self.identity_registry.resolve(
