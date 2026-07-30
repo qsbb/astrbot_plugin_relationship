@@ -172,6 +172,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("relationship_profiles", self.js)
         self.assertIn("relationship_profile_id:", self.js)
         self.assertIn("initial_prior:", self.js)
+        self.assertIn("whitelisted_relationship_profiles", self.js)
+        self.assertIn("白名单关系可在已有互动后设置一次", self.js)
 
     def test_account_memory_profile_is_editable(self) -> None:
         self.assertIn('data-account="memory_profile_id"', self.js)
@@ -185,9 +187,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("该账号已有互动，将保留现有关系", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.6.5", self.html)
-        self.assertIn("app.js?v=0.6.5", self.html)
-        self.assertIn("rev=relationship-unbind-1", self.html)
+        self.assertIn("style.css?v=0.6.6", self.html)
+        self.assertIn("app.js?v=0.6.6", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)
@@ -221,7 +222,12 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn(".quick-edit-command", self.css)
         self.assertIn(".unbind-confirmation", self.css)
         self.assertIn(".row-actions", self.css)
-        self.assertIn("overflow-x: scroll", self.css)
+        self.assertIn("table-layout: fixed", self.css)
+        self.assertIn("content: attr(data-label)", self.css)
+        self.assertNotIn("overflow-x: scroll", self.css)
+        self.assertNotIn("min-width: 1010px", self.css)
+        self.assertIn('data-label="最后互动"', self.js)
+        self.assertIn("relationship-detail-row", self.js)
 
 
 if __name__ == "__main__":

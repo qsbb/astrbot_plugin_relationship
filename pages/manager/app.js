@@ -21,6 +21,7 @@ const CONFIG_GROUPS = [
 let configSchema = {};
 let configValues = {};
 let identities = [];
+let editingIdentity = null;
 let overviewUsers = [];
 let relationshipProfiles = ["default"];
 let defaultRelationshipProfile = "default";
@@ -184,21 +185,25 @@ function render(payload) {
       : (user.display_name
         ? `<small class="user-id">${escapeHtml(user.user_id)} · ${user.linked_accounts} 个账号</small>`
         : "");
-    return (`<tr><td>${escapeHtml(user.display_name || user.user_id)}`
+    const confirmationRow = deleteConfirmation
+      ? `<tr class="relationship-detail-row"><td colspan="11">${deleteConfirmation}</td></tr>`
+      : "";
+    return (`<tr class="relationship-data-row"><td data-label="用户">${escapeHtml(user.display_name || user.user_id)}`
     + `${identityHint}</td>`
-    + `<td><span class="profile-stack">${profileMarkup}</span></td>`
-    + `<td>${escapeHtml(user.band)}</td>`
-    + `<td>${user.affinity}</td><td>${user.trust}</td><td>${user.familiarity}</td><td>${user.interaction_count}</td>`
-    + `<td>${user.whitelisted ? '<span class="badge ok">白名单</span>' : '<span class="badge">普通</span>'}</td>`
-    + `<td>${user.boundary === "开放" ? '<span class="badge safe">开放</span>' : '<span class="badge warn">谨慎</span>'}</td>`
-    + `<td>${formatTime(user.last_event_at)}</td>`
-    + `<td><div class="row-actions"><button type="button" class="quick-edit-command" data-quick-edit="${index}">`
+    + `<td data-label="关系人格"><span class="profile-stack">${profileMarkup}</span></td>`
+    + `<td data-label="关系层级">${escapeHtml(user.band)}</td>`
+    + `<td data-label="好感">${user.affinity}</td><td data-label="信任">${user.trust}</td>`
+    + `<td data-label="熟悉度">${user.familiarity}</td><td data-label="互动">${user.interaction_count}</td>`
+    + `<td data-label="白名单">${user.whitelisted ? '<span class="badge ok">白名单</span>' : '<span class="badge">普通</span>'}</td>`
+    + `<td data-label="边界">${user.boundary === "开放" ? '<span class="badge safe">开放</span>' : '<span class="badge warn">谨慎</span>'}</td>`
+    + `<td data-label="最后互动">${formatTime(user.last_event_at)}</td>`
+    + `<td data-label="操作"><div class="row-actions"><button type="button" class="quick-edit-command" data-quick-edit="${index}">`
     + `${actionLabel}</button><button type="button" class="relationship-delete-command danger-command" `
     + `data-delete-relationship="${index}" data-confirmed="${deletePending ? "true" : "false"}"`
     + ` data-awaiting-profile="${deletePending && multipleProfiles && !pendingRelationshipDeleteProfileId ? "true" : "false"}"`
     + `${deletePending && multipleProfiles && !pendingRelationshipDeleteProfileId ? " disabled" : ""}>`
     + `${deletePending ? (multipleProfiles ? "确认删除所选人格" : "确认删除关系") : "删除关系"}`
-    + `</button></div>${deleteConfirmation}</td></tr>`);
+    + `</button></div></td></tr>${confirmationRow}`);
   }).join("");
 }
 
@@ -350,6 +355,20 @@ function setInitialPriorAvailability(enabled, hint = "仅能为尚未产生互�
   $("#initial-prior-hint").textContent = hint;
 }
 
+function updateInitialPriorForEditingIdentity() {
+  if (!editingIdentity) return;
+  const selectedProfile = $("#relationship-profile-id").value;
+  const whitelistProfiles = editingIdentity.whitelisted_relationship_profiles || [];
+  if (whitelistProfiles.includes(selectedProfile)) {
+    setInitialPriorAvailability(
+      true,
+      "白名单关系可在已有互动后设置一次；会保留互动历史，并把关系分数调整到所选固定档位。"
+    );
+    return;
+  }
+  setInitialPriorAvailability(true);
+}
+
 function hideIdentityMerge() {
   clearTimeout(identityMergeConfirmTimer);
   identityMergeConfirmTimer = null;
@@ -406,6 +425,7 @@ function showIdentityMerge(source) {
 
 function resetIdentityEditor(accountCount = 1) {
   hideIdentityMerge();
+  editingIdentity = null;
   $("#identity-editor-title").textContent = "新建自然人";
   $("#person-display-name").value = "";
   $("#person-display-name").readOnly = false;
@@ -422,6 +442,7 @@ function resetIdentityEditor(accountCount = 1) {
 
 function editIdentity(person) {
   hideIdentityMerge();
+  editingIdentity = person;
   $("#identity-editor-title").textContent = "编辑账号归属";
   $("#person-display-name").value = person.display_name || "";
   $("#person-display-name").readOnly = false;
@@ -429,7 +450,7 @@ function editIdentity(person) {
   $("#person-id").readOnly = true;
   renderRelationshipProfileOptions(person.relationship_profile_id || defaultRelationshipProfile);
   $("#initial-prior").value = "";
-  setInitialPriorAvailability(true);
+  updateInitialPriorForEditingIdentity();
   $("#account-list").innerHTML = (person.accounts || []).map(accountRow).join("") || accountRow();
   $("#btn-add-account").hidden = false;
   $("#btn-save-person").hidden = false;
@@ -774,7 +795,9 @@ async function deleteRelationship(index, button) {
   if (!user) return;
   const profiles = relationshipDeleteProfiles(user);
   const multipleProfiles = profiles.length > 1;
-  const picker = button.closest("td")?.querySelector("[data-delete-relationship-profile]");
+  const picker = document.querySelector(
+    "[data-relationship-delete-confirmation] [data-delete-relationship-profile]"
+  );
   const selectedProfile = multipleProfiles
     ? String(picker?.value || pendingRelationshipDeleteProfileId || "").trim()
     : profiles[0];
@@ -818,6 +841,9 @@ function initIdentityEditor() {
   $("#btn-save-person").addEventListener("click", saveIdentity);
   $("#btn-merge-identity").addEventListener("click", mergeIdentity);
   $("#identity-merge-target").addEventListener("change", resetIdentityMergeConfirmation);
+  $("#relationship-profile-id").addEventListener("change", () => {
+    if (editingIdentity) updateInitialPriorForEditingIdentity();
+  });
   $("#account-list").addEventListener("click", (event) => {
     const button = event.target.closest(".remove-account");
     if (button) button.closest(".account-row")?.remove();
@@ -863,7 +889,9 @@ async function init() {
     const picker = event.target.closest("[data-delete-relationship-profile]");
     if (picker) {
       pendingRelationshipDeleteProfileId = picker.value;
-      const deleteButton = picker.closest("td")?.querySelector("[data-delete-relationship]");
+      const deleteButton = $(
+        '#relation-tbody [data-delete-relationship][data-confirmed="true"]'
+      );
       if (deleteButton) {
         deleteButton.disabled = !picker.value;
         deleteButton.dataset.awaitingProfile = picker.value ? "false" : "true";

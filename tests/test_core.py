@@ -577,6 +577,64 @@ class ManagerTest(unittest.TestCase):
         self.assertEqual(mgr._states[target].affinity_score, 65.0)
         self.assertNotIn(account, mgr._states)
 
+    def test_whitelist_override_applies_prior_once_without_erasing_history(
+        self,
+    ) -> None:
+        mgr = self._manager()
+        scope = RelationshipScope(
+            bot_id="bot",
+            user_id="u1",
+            person_id="summer",
+            relationship_profile_id="default",
+        )
+        key = scope.user_key
+        mgr._states[key] = UserRelationState(
+            affinity_score=72.0,
+            trust_score=68.0,
+            familiarity_score=44.0,
+            daily_affinity_positive_used=2.5,
+            interaction_count=37,
+            last_event_at=900.0,
+            extra={"trusted_semantic_evidence_mass": 6.0},
+        )
+
+        snapshot = _run(
+            mgr.apply_initial_prior(scope, "fond", allow_active_relationship=True)
+        )
+
+        state = mgr._states[key]
+        self.assertEqual(snapshot.affinity, 64)
+        self.assertEqual(state.trust_score, 60)
+        self.assertEqual(state.familiarity_score, 25)
+        self.assertEqual(state.interaction_count, 37)
+        self.assertEqual(state.last_event_at, 900.0)
+        self.assertEqual(state.daily_affinity_positive_used, 2.5)
+        self.assertEqual(state.extra["trusted_semantic_evidence_mass"], 6.0)
+        with self.assertRaisesRegex(ValueError, "INITIAL_PRIOR_ALREADY_APPLIED"):
+            _run(
+                mgr.apply_initial_prior(
+                    scope, "acquainted", allow_active_relationship=True
+                )
+            )
+
+    def test_active_relationship_prior_still_requires_explicit_override(self) -> None:
+        mgr = self._manager()
+        scope = RelationshipScope(
+            bot_id="bot",
+            user_id="u1",
+            person_id="summer",
+            relationship_profile_id="default",
+        )
+        mgr._states[scope.user_key] = UserRelationState(
+            interaction_count=1, last_event_at=900.0
+        )
+
+        with self.assertRaisesRegex(ValueError, "RELATIONSHIP_ALREADY_ACTIVE"):
+            _run(mgr.apply_initial_prior(scope, "fond"))
+
+        self.assertEqual(mgr._states[scope.user_key].interaction_count, 1)
+        self.assertEqual(mgr._states[scope.user_key].initial_prior, "")
+
     def test_explicit_merge_counts_identical_independent_person_states(self) -> None:
         mgr = self._manager()
         target = "persona:default:person:summer"

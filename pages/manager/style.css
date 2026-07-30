@@ -199,31 +199,29 @@ button:disabled { cursor: wait; opacity: .55; }
 .table-card { min-width: 0; padding-bottom: 8px; }
 .table-wrap {
   width: calc(100% + 44px);
-  max-height: min(70vh, 680px);
   margin: 16px -22px 0;
-  overflow-x: scroll;
-  overflow-y: auto;
-  overscroll-behavior-inline: contain;
-  scrollbar-color: var(--accent) #071522;
-  scrollbar-width: auto;
-  -webkit-overflow-scrolling: touch;
+  overflow: visible;
 }
-.table-wrap::-webkit-scrollbar { width: 12px; height: 12px; }
-.table-wrap::-webkit-scrollbar-track { background: #071522; }
-.table-wrap::-webkit-scrollbar-thumb {
-  border: 3px solid #071522;
-  border-radius: 999px;
-  background: var(--accent);
-  background-clip: padding-box;
-}
-table { width: 100%; min-width: 1010px; border-collapse: collapse; }
+table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.relation-col-user { width: 18%; }
+.relation-col-profile { width: 13%; }
+.relation-col-band { width: 9%; }
+.relation-col-score { width: 5%; }
+.relation-col-familiarity { width: 6%; }
+.relation-col-interactions { width: 5%; }
+.relation-col-state { width: 7%; }
+.relation-col-time { width: 14%; }
+.relation-col-actions { width: 11%; }
 th,
 td {
-  padding: 13px 16px;
+  padding: 11px 8px;
   text-align: left;
-  white-space: nowrap;
+  vertical-align: top;
+  overflow-wrap: anywhere;
   border-bottom: 1px solid var(--line);
 }
+th:nth-child(n + 3):nth-child(-n + 9),
+td:nth-child(n + 3):nth-child(-n + 9) { text-align: center; }
 th {
   position: sticky;
   top: 0;
@@ -234,9 +232,9 @@ th {
   background: #0b1826;
   box-shadow: 0 1px 0 var(--line);
 }
-.user-id { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.user-id { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .profile-id { color: var(--accent); font-size: 12px; }
-.profile-stack { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.profile-stack { display: grid; gap: 4px; }
 tbody tr:hover { background: rgba(93, 214, 192, .045); }
 .empty-row td { padding: 28px; text-align: center; color: var(--muted); }
 .badge {
@@ -257,11 +255,10 @@ tbody tr:hover { background: rgba(93, 214, 192, .045); }
   white-space: nowrap;
 }
 .row-actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 6px;
-  align-items: center;
 }
+.row-actions button { width: 100%; }
 .relationship-delete-command {
   padding: 7px 10px;
   border-radius: 8px;
@@ -274,13 +271,14 @@ tbody tr:hover { background: rgba(93, 214, 192, .045); }
   gap: 8px;
   min-width: 270px;
   max-width: 340px;
-  margin-top: 8px;
+  margin-left: auto;
   padding: 10px;
   border: 1px solid rgba(255, 123, 114, .42);
   border-radius: 8px;
   background: #0b1826;
   white-space: normal;
 }
+.relationship-detail-row td { padding: 10px 12px 12px; background: rgba(7, 17, 29, .22); }
 .relationship-delete-confirmation label {
   display: grid;
   gap: 5px;
@@ -558,6 +556,40 @@ button.primary:disabled { opacity: .55; }
   .identity-merge-panel { grid-template-columns: 1fr; align-items: stretch; }
   .account-row { grid-template-columns: repeat(2, minmax(0, 1fr)) 40px; }
   .account-row .icon-command { grid-column: 3; grid-row: 1 / span 3; }
+  .table-wrap { width: calc(100% + 32px); margin-right: -16px; margin-left: -16px; }
+  table,
+  tbody { display: block; }
+  colgroup,
+  thead { display: none; }
+  tbody tr.relationship-data-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 18px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  tbody tr.relationship-data-row td {
+    display: grid;
+    grid-template-columns: 82px minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+    padding: 4px 0;
+    text-align: left;
+    border: 0;
+  }
+  tbody tr.relationship-data-row td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 12px;
+  }
+  tbody tr.relationship-data-row td:first-child,
+  tbody tr.relationship-data-row td:last-child { grid-column: 1 / -1; }
+  .row-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  tbody tr.relationship-detail-row { display: block; }
+  .relationship-detail-row td { display: block; border-bottom: 1px solid var(--line); }
+  .relationship-delete-confirmation { max-width: none; margin: 0; }
+  .empty-row { display: block; }
+  .empty-row td { display: block; width: 100%; }
 }
 
 @media (max-width: 760px) {
@@ -574,6 +606,11 @@ button.primary:disabled { opacity: .55; }
 @media (max-width: 560px) {
   .account-row { grid-template-columns: minmax(0, 1fr) 40px; }
   .account-row .icon-command { grid-column: 2; grid-row: 1 / span 6; }
+  tbody tr.relationship-data-row { grid-template-columns: minmax(0, 1fr); }
+  tbody tr.relationship-data-row td:first-child,
+  tbody tr.relationship-data-row td:last-child { grid-column: auto; }
+  .relationship-delete-confirmation { grid-template-columns: minmax(0, 1fr); }
+  .relationship-delete-confirmation small { grid-column: auto; }
 }
 
 @media (max-width: 480px) {

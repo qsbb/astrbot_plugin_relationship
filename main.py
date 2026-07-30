@@ -91,7 +91,7 @@ from .core.request_context import (
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.6.5"
+__version__ = "0.6.6"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -1197,6 +1197,14 @@ class RelationshipPlugin(Star):
         async with self._identity_write_lock:
             persons = self.identity_registry.list_persons()
             profile_ids = self._known_relationship_profiles()
+            for person in persons:
+                person["whitelisted_relationship_profiles"] = [
+                    profile_id
+                    for profile_id in profile_ids
+                    if self._is_relationship_whitelisted(
+                        profile_id, str(person.get("person_id") or "")
+                    )
+                ]
         bridge = self._memory_companion_bridge()
         payload = {
             "success": True,
@@ -1210,6 +1218,13 @@ class RelationshipPlugin(Star):
             "initial_prior_options": ("neutral", "acquainted", "fond"),
         }
         return json_response(payload) if json_response else payload
+
+    def _is_relationship_whitelisted(self, profile_id: str, identity: str) -> bool:
+        identity = str(identity or "").strip()
+        if not identity:
+            return False
+        whitelist = set(self._affinity_config.whitelist_user_ids)
+        return bool({identity, f"{profile_id}/{identity}"}.intersection(whitelist))
 
     async def _page_save_identity(self):
         data = await self._request_json()
@@ -1319,9 +1334,17 @@ class RelationshipPlugin(Star):
             )
             prior_result["requested"] = True
             try:
-                await self.manager.apply_initial_prior(scope, initial_prior)
+                whitelist_override = self._is_relationship_whitelisted(
+                    requested_profile, person.person_id
+                )
+                await self.manager.apply_initial_prior(
+                    scope,
+                    initial_prior,
+                    allow_active_relationship=whitelist_override,
+                )
                 prior_result["applied"] = True
                 prior_result["level"] = initial_prior
+                prior_result["whitelist_override"] = whitelist_override
             except ValueError as exc:
                 prior_result["error"] = str(exc) or "INITIAL_PRIOR_REJECTED"
             except OSError:

@@ -540,9 +540,18 @@ class RelationshipStateManager:
         return True
 
     async def apply_initial_prior(
-        self, scope: RelationshipScope, prior: str
+        self,
+        scope: RelationshipScope,
+        prior: str,
+        *,
+        allow_active_relationship: bool = False,
     ) -> RelationshipSnapshot:
-        """Apply one fixed admin prior per relationship profile and natural person."""
+        """Apply one fixed admin prior per relationship profile and natural person.
+
+        ``allow_active_relationship`` is reserved for an administrator-verified
+        whitelist exception. It changes the three relationship scores while
+        preserving interaction history and evidence metadata.
+        """
         prior = str(prior or "").strip().lower()
         if prior not in INITIAL_RELATIONSHIP_PRIORS:
             raise ValueError("INVALID_INITIAL_PRIOR")
@@ -565,26 +574,27 @@ class RelationshipStateManager:
                 ):
                     raise ValueError("INITIAL_PRIOR_ALREADY_APPLIED")
                 state = self._materialize_bound_state(scope)
-                if state is not None and (
+                relationship_active = state is not None and (
                     state.initial_prior_applied_at > 0
                     or state.interaction_count > 0
                     or state.last_event_at > 0
-                ):
+                )
+                if relationship_active and not allow_active_relationship:
                     raise ValueError("RELATIONSHIP_ALREADY_ACTIVE")
 
                 now = self._safe_clock()
                 affinity, trust, familiarity = INITIAL_RELATIONSHIP_PRIORS[prior]
-                state = UserRelationState(
-                    affinity_score=affinity,
-                    trust_score=trust,
-                    trust_reliability=trust,
-                    trust_benevolence=trust,
-                    trust_integrity=trust,
-                    trust_epistemic=trust,
-                    familiarity_score=familiarity,
-                    initial_prior=prior,
-                    initial_prior_applied_at=now,
-                )
+                if state is None:
+                    state = UserRelationState()
+                state.affinity_score = affinity
+                state.trust_score = trust
+                state.trust_reliability = trust
+                state.trust_benevolence = trust
+                state.trust_integrity = trust
+                state.trust_epistemic = trust
+                state.familiarity_score = familiarity
+                state.initial_prior = prior
+                state.initial_prior_applied_at = now
                 self._states[scope.user_key] = state
                 for alias_key in scope.state_alias_keys:
                     self._states.pop(alias_key, None)

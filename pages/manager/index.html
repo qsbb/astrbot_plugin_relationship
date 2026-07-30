@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-情 · 关系状态</title>
-  <link rel="stylesheet" href="./style.css?v=0.6.5&amp;rev=relationship-unbind-1" />
+  <link rel="stylesheet" href="./style.css?v=0.6.6" />
 </head>
 <body>
   <main class="shell">
@@ -74,6 +74,17 @@
         </div>
         <div class="table-wrap">
           <table>
+            <colgroup>
+              <col class="relation-col-user" />
+              <col class="relation-col-profile" />
+              <col class="relation-col-band" />
+              <col class="relation-col-score" span="2" />
+              <col class="relation-col-familiarity" />
+              <col class="relation-col-interactions" />
+              <col class="relation-col-state" span="2" />
+              <col class="relation-col-time" />
+              <col class="relation-col-actions" />
+            </colgroup>
             <thead><tr><th>用户</th><th>关系人格</th><th>关系层级</th><th>好感</th><th>信任</th><th>熟悉度</th><th>互动</th><th>白名单</th><th>边界</th><th>最后互动</th><th>操作</th></tr></thead>
             <tbody id="relation-tbody"><tr class="empty-row"><td colspan="11">加载中…</td></tr></tbody>
           </table>
@@ -123,7 +134,7 @@
                 <option value="acquainted">已认识</option>
                 <option value="fond">有好感</option>
               </select>
-              <small id="initial-prior-hint">仅能为尚未产生互动的新关系设置一次。</small>
+              <small id="initial-prior-hint">新关系可设置一次；白名单关系在已有互动后也可设置一次。</small>
             </label>
           </div>
           <div class="account-heading">
@@ -155,6 +166,6 @@
     <div id="toast" class="hidden" role="status" aria-live="polite"></div>
   </main>
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script type="module" src="./app.js?v=0.6.5&amp;rev=relationship-unbind-1"></script>
+  <script type="module" src="./app.js?v=0.6.6"></script>
 </body>
 </html>
