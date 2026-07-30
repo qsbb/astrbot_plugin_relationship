@@ -94,6 +94,8 @@ class PagesUiTest(unittest.TestCase):
     def test_overview_shows_relationship_profile(self) -> None:
         self.assertIn("关系人格", self.html)
         self.assertIn("user.relationship_profile_id", self.js)
+        self.assertIn("user.relationship_profile_ids", self.js)
+        self.assertIn('class="profile-stack"', self.js)
         self.assertIn('colspan="11"', self.html)
         self.assertIn('colspan="11"', self.js)
 
@@ -127,8 +129,9 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("该账号已有互动，将保留现有关系", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.6.3", self.html)
-        self.assertIn("app.js?v=0.6.3", self.html)
+        self.assertIn("style.css?v=0.6.4", self.html)
+        self.assertIn("app.js?v=0.6.4", self.html)
+        self.assertIn("rev=identity-merge-2", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)

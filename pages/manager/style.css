@@ -209,6 +209,7 @@ td {
 th { color: var(--muted); font-size: 12px; font-weight: 600; background: rgba(7, 17, 29, .35); }
 .user-id { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
 .profile-id { color: var(--accent); font-size: 12px; }
+.profile-stack { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 tbody tr:hover { background: rgba(93, 214, 192, .045); }
 .empty-row td { padding: 28px; text-align: center; color: var(--muted); }
 .badge {

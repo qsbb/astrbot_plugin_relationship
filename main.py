@@ -90,7 +90,7 @@ from .core.request_context import (
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.6.3"
+__version__ = "0.6.4"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -838,6 +838,71 @@ class RelationshipPlugin(Star):
             return "保持距离"
         return "边界警戒"
 
+    def _merge_registered_person_overview_rows(
+        self, users: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Group only administrator-registered people for overview presentation."""
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        visible: list[dict[str, Any]] = []
+        for item in users:
+            profile_id = str(item.get("relationship_profile_id") or "")
+            item["relationship_profile_ids"] = [profile_id] if profile_id else []
+            item["merged_profile_count"] = 1
+            person_id = str(item.get("person_id") or "")
+            if person_id:
+                grouped.setdefault(person_id, []).append(item)
+            else:
+                visible.append(item)
+
+        for rows in grouped.values():
+            if len(rows) == 1:
+                visible.append(rows[0])
+                continue
+
+            weights = [max(1, int(row.get("interaction_count") or 0)) for row in rows]
+            total_weight = float(sum(weights))
+
+            def weighted(field: str) -> float:
+                return sum(
+                    float(row.get(field) or 0.0) * weight
+                    for row, weight in zip(rows, weights)
+                ) / total_weight
+
+            affinity = weighted("affinity")
+            profiles = sorted(
+                {
+                    str(row.get("relationship_profile_id") or "")
+                    for row in rows
+                    if row.get("relationship_profile_id")
+                }
+            )
+            merged = dict(rows[0])
+            merged.update(
+                {
+                    "relationship_profile_id": profiles[0] if profiles else "",
+                    "relationship_profile_ids": profiles,
+                    "merged_profile_count": len(profiles),
+                    "affinity": round(affinity, 1),
+                    "trust": round(weighted("trust"), 1),
+                    "familiarity": round(weighted("familiarity"), 1),
+                    "interaction_count": sum(
+                        int(row.get("interaction_count") or 0) for row in rows
+                    ),
+                    "band": self._relation_band(affinity),
+                    "whitelisted": all(bool(row.get("whitelisted")) for row in rows),
+                    "boundary": (
+                        "开放"
+                        if all(row.get("boundary") == "开放" for row in rows)
+                        else "谨慎"
+                    ),
+                    "last_event_at": max(
+                        float(row.get("last_event_at") or 0.0) for row in rows
+                    ),
+                }
+            )
+            visible.append(merged)
+        return visible
+
     async def _page_overview(self):
         states = getattr(self.manager, "_states", {})
         users = []
@@ -922,6 +987,7 @@ class RelationshipPlugin(Star):
                     "last_event_at": state.last_event_at,
                 }
             )
+        users = self._merge_registered_person_overview_rows(users)
         users.sort(key=lambda item: (item["affinity"], item["trust"]), reverse=True)
         bands = {
             name: sum(item["band"] == name for item in users)
@@ -937,7 +1003,11 @@ class RelationshipPlugin(Star):
                 "familiarity_gate": self._affinity_config.whitelist_familiarity_gate,
                 "whitelist_count": len(whitelist),
                 "profile_count": len(
-                    {item["relationship_profile_id"] for item in users}
+                    {
+                        profile_id
+                        for item in users
+                        for profile_id in item.get("relationship_profile_ids", ())
+                    }
                 ),
             },
             "summary": {
@@ -1085,7 +1155,7 @@ class RelationshipPlugin(Star):
         data = await self._request_json()
         if not isinstance(data, dict):
             payload = {"success": False, "error": "INVALID_JSON_PAYLOAD"}
-            return json_response(payload, status=400) if json_response else payload
+            return json_response(payload, status_code=400) if json_response else payload
         async with self._identity_write_lock:
             blocked = self._identity_mutation_blocked_response()
             if blocked is not None:
@@ -1100,7 +1170,7 @@ class RelationshipPlugin(Star):
             "error": "RELATIONSHIP_STORAGE_READ_ONLY",
             "detail": "relationship data uses an unsupported schema; identity changes are disabled",
         }
-        return json_response(payload, status=409) if json_response else payload
+        return json_response(payload, status_code=409) if json_response else payload
 
     async def _save_identity_payload(self, data: dict[str, Any]):
         identity_before = self.identity_registry.snapshot()
@@ -1141,7 +1211,7 @@ class RelationshipPlugin(Star):
             ]
         except ValueError as exc:
             payload = {"success": False, "error": str(exc) or "INVALID_IDENTITY"}
-            return json_response(payload, status=400) if json_response else payload
+            return json_response(payload, status_code=400) if json_response else payload
         except Exception as exc:
             rollback_error = None
             if identity_saved:
@@ -1166,7 +1236,7 @@ class RelationshipPlugin(Star):
                     else (str(exc) or type(exc).__name__)
                 ),
             }
-            return json_response(payload, status=500) if json_response else payload
+            return json_response(payload, status_code=500) if json_response else payload
         prior_result: dict[str, object] = {"requested": False, "applied": False}
         if initial_prior:
             anchor = person.accounts[0]
@@ -1338,16 +1408,16 @@ class RelationshipPlugin(Star):
         data = await self._request_json()
         if not isinstance(data, dict):
             payload = {"success": False, "error": "INVALID_JSON_PAYLOAD"}
-            return json_response(payload, status=400) if json_response else payload
+            return json_response(payload, status_code=400) if json_response else payload
         target_person_id = str(data.get("target_person_id") or "").strip()
         source_person_id = str(data.get("source_person_id") or "").strip()
         account = data.get("account")
         if not target_person_id:
             payload = {"success": False, "error": "TARGET_PERSON_REQUIRED"}
-            return json_response(payload, status=400) if json_response else payload
+            return json_response(payload, status_code=400) if json_response else payload
         if bool(source_person_id) == isinstance(account, dict):
             payload = {"success": False, "error": "MERGE_SOURCE_REQUIRED"}
-            return json_response(payload, status=400) if json_response else payload
+            return json_response(payload, status_code=400) if json_response else payload
 
         async with self._identity_write_lock:
             blocked = self._identity_mutation_blocked_response()
@@ -1474,12 +1544,12 @@ class RelationshipPlugin(Star):
                         "detail": f"{exc}; rollback: {rollback_error}",
                     }
                     return (
-                        json_response(payload, status=500)
+                        json_response(payload, status_code=500)
                         if json_response
                         else payload
                     )
                 payload = {"success": False, "error": str(exc) or "INVALID_MERGE"}
-                return json_response(payload, status=400) if json_response else payload
+                return json_response(payload, status_code=400) if json_response else payload
             except Exception as exc:
                 rollback_error = None
                 if identity_changed:
@@ -1506,7 +1576,7 @@ class RelationshipPlugin(Star):
                         else (str(exc) or type(exc).__name__)
                     ),
                 }
-                return json_response(payload, status=500) if json_response else payload
+                return json_response(payload, status_code=500) if json_response else payload
 
         payload = {
             "success": True,
@@ -1526,7 +1596,7 @@ class RelationshipPlugin(Star):
         )
         if not person_id:
             payload = {"success": False, "error": "PERSON_ID_REQUIRED"}
-            return json_response(payload, status=400) if json_response else payload
+            return json_response(payload, status_code=400) if json_response else payload
         try:
             async with self._identity_write_lock:
                 blocked = self._identity_mutation_blocked_response()
@@ -1535,23 +1605,23 @@ class RelationshipPlugin(Star):
                 deleted = self.identity_registry.delete(person_id)
         except ValueError as exc:
             payload = {"success": False, "error": str(exc) or "INVALID_PERSON_ID"}
-            return json_response(payload, status=400) if json_response else payload
+            return json_response(payload, status_code=400) if json_response else payload
         except OSError as exc:
             payload = {
                 "success": False,
                 "error": "IDENTITY_PERSIST_FAILED",
                 "detail": str(exc) or type(exc).__name__,
             }
-            return json_response(payload, status=500) if json_response else payload
+            return json_response(payload, status_code=500) if json_response else payload
         payload = {"success": deleted, "error": "" if deleted else "NOT_FOUND"}
         status = 200 if deleted else 404
-        return json_response(payload, status=status) if json_response else payload
+        return json_response(payload, status_code=status) if json_response else payload
 
     async def _page_save_config(self):
         data = await self._request_json()
         if not isinstance(data, dict):
             payload = {"success": False, "error": "INVALID_JSON_PAYLOAD"}
-            return json_response(payload, status=400) if json_response else payload
+            return json_response(payload, status_code=400) if json_response else payload
         schema = self._schema()
         current_config = self._public_config()
         changes: dict[str, Any] = {}
@@ -1568,7 +1638,7 @@ class RelationshipPlugin(Star):
                 errors[key] = "INVALID_VALUE"
         if errors:
             payload = {"success": False, "error": "VALIDATION_FAILED", "fields": errors}
-            return json_response(payload, status=400) if json_response else payload
+            return json_response(payload, status_code=400) if json_response else payload
         if not changes:
             payload = {
                 "success": True,
@@ -1602,7 +1672,7 @@ class RelationshipPlugin(Star):
                 "error": "CONFIG_PERSIST_FAILED",
                 "detail": str(exc) or type(exc).__name__,
             }
-            return json_response(payload, status=500) if json_response else payload
+            return json_response(payload, status_code=500) if json_response else payload
 
         self._config_overrides = updated_overrides
         try:
@@ -1613,7 +1683,7 @@ class RelationshipPlugin(Star):
                 "error": "CONFIG_APPLY_FAILED",
                 "detail": str(exc) or type(exc).__name__,
             }
-            return json_response(payload, status=500) if json_response else payload
+            return json_response(payload, status_code=500) if json_response else payload
         payload = {
             "success": True,
             "config": self._public_config(),

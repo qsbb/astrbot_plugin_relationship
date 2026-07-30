@@ -37,7 +37,7 @@ def _install_fake_astrbot() -> None:
     api = types.ModuleType("astrbot.api")
     api_event = types.ModuleType("astrbot.api.event")
     api_star = types.ModuleType("astrbot.api.star")
-    api_web = types.ModuleType("astrbot.api.web")  # 故意不含 json_response
+    api_web = types.ModuleType("astrbot.api.web")
 
     api.logger = logging.getLogger("fake_astrbot")
 
@@ -105,6 +105,22 @@ def _install_fake_astrbot() -> None:
     api_star.Star = Star
     api_star.StarTools = StarTools
     api_star.register = register
+
+    class _Request:
+        @staticmethod
+        async def json(default=None):
+            return default
+
+    class _JsonResponse(dict):
+        def __init__(self, payload, status_code):
+            super().__init__(payload)
+            self.status_code = status_code
+
+    def json_response(payload, *, status_code=200):
+        return _JsonResponse(payload, status_code)
+
+    api_web.request = _Request()
+    api_web.json_response = json_response
 
     astrbot.api = api
     api.event = api_event
@@ -629,6 +645,109 @@ class MainEntryTest(unittest.TestCase):
             },
         )
         self.assertIn(payload["users"][0]["boundary"], ("开放", "谨慎"))
+
+    def test_page_overview_groups_only_registered_person_profiles(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "Summer",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                    }
+                ],
+            }
+        )
+        self._save_identity(
+            {
+                "person_id": "departed",
+                "display_name": "Departed",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-3",
+                        "bot_id": "bot-1",
+                    }
+                ],
+            }
+        )
+
+        def request(persona_id: str):
+            return types.SimpleNamespace(
+                conversation=types.SimpleNamespace(persona_id=persona_id),
+                extra_user_content_parts=[],
+                system_prompt="",
+            )
+
+        for persona_id in ("persona-a", "persona-b"):
+            _run(
+                self.plugin.on_llm_request(
+                    FakeEvent(
+                        sender_id="user-1",
+                        message_id=f"registered-{persona_id}",
+                    ),
+                    request(persona_id),
+                )
+            )
+            _run(
+                self.plugin.on_llm_request(
+                    FakeEvent(
+                        sender_id="user-2",
+                        message_id=f"unregistered-{persona_id}",
+                    ),
+                    request(persona_id),
+                )
+            )
+            _run(
+                self.plugin.on_llm_request(
+                    FakeEvent(
+                        sender_id="user-3",
+                        message_id=f"orphaned-{persona_id}",
+                    ),
+                    request(persona_id),
+                )
+            )
+
+        async def delete_request_json():
+            return {"person_id": "departed"}
+
+        self.plugin._request_json = delete_request_json
+        self.assertTrue(_run(self.plugin._page_delete_identity())["success"])
+
+        payload = _run(self.plugin._page_overview())
+        registered = [
+            item for item in payload["users"] if item["person_id"] == "summer"
+        ]
+        unregistered = [
+            item for item in payload["users"] if item["user_id"] == "user-2"
+        ]
+        orphaned = [
+            item
+            for item in payload["users"]
+            if item["orphaned_person_id"] == "departed"
+        ]
+
+        self.assertEqual(payload["summary"]["user_count"], 5)
+        self.assertEqual(payload["policy"]["profile_count"], 2)
+        self.assertEqual(len(registered), 1)
+        self.assertEqual(
+            registered[0]["relationship_profile_ids"],
+            ["persona-a", "persona-b"],
+        )
+        self.assertEqual(registered[0]["merged_profile_count"], 2)
+        self.assertEqual(registered[0]["interaction_count"], 2)
+        self.assertEqual(len(unregistered), 2)
+        self.assertTrue(all(not item["person_id"] for item in unregistered))
+        self.assertTrue(
+            all(len(item["relationship_profile_ids"]) == 1 for item in unregistered)
+        )
+        self.assertEqual(len(orphaned), 2)
+        self.assertTrue(all(not item["person_id"] for item in orphaned))
+        self.assertTrue(
+            all(len(item["relationship_profile_ids"]) == 1 for item in orphaned)
+        )
 
     def test_group_observation_does_not_prefill_group_umo(self) -> None:
         _run(
@@ -1305,10 +1424,15 @@ class MainEntryTest(unittest.TestCase):
         self.plugin._request_json = fake_request_json
         payload = _run(self.plugin._page_delete_identity())
         self.assertTrue(payload["success"])
+        self.assertEqual(payload.status_code, 200)
         self.assertIsNone(self.plugin.identity_registry.get("summer"))
         self.assertIn("persona:default:person:summer", self.plugin.manager._states)
         overview = _run(self.plugin._page_overview())
         self.assertEqual(overview["users"][0]["orphaned_person_id"], "summer")
+        not_found = _run(self.plugin._page_delete_identity())
+        self.assertFalse(not_found["success"])
+        self.assertEqual(not_found["error"], "NOT_FOUND")
+        self.assertEqual(not_found.status_code, 404)
 
     def test_orphaned_relationship_can_merge_into_existing_identity(self) -> None:
         self._save_identity(

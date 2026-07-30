@@ -132,6 +132,12 @@ function render(payload) {
   tbody.innerHTML = users.map((user, index) => {
     const orphaned = Boolean(user.orphaned_person_id);
     const actionLabel = user.person_id ? "编辑归属" : (orphaned ? "合并历史关系" : "快速归属");
+    const profiles = Array.isArray(user.relationship_profile_ids) && user.relationship_profile_ids.length
+      ? user.relationship_profile_ids
+      : [user.relationship_profile_id || defaultRelationshipProfile];
+    const profileMarkup = profiles.map((profileId) => (
+      `<code class="profile-id">${escapeHtml(profileId)}</code>`
+    )).join("");
     const identityHint = orphaned
       ? `<small class="user-id">${escapeHtml(user.orphaned_person_id)} · 账号归属已删除</small>`
       : (user.display_name
@@ -139,7 +145,7 @@ function render(payload) {
         : "");
     return (`<tr><td>${escapeHtml(user.display_name || user.user_id)}`
     + `${identityHint}</td>`
-    + `<td><code class="profile-id">${escapeHtml(user.relationship_profile_id || defaultRelationshipProfile)}</code></td>`
+    + `<td><span class="profile-stack">${profileMarkup}</span></td>`
     + `<td>${escapeHtml(user.band)}</td>`
     + `<td>${user.affinity}</td><td>${user.trust}</td><td>${user.familiarity}</td><td>${user.interaction_count}</td>`
     + `<td>${user.whitelisted ? '<span class="badge ok">白名单</span>' : '<span class="badge">普通</span>'}</td>`
