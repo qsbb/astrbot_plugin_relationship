@@ -14,10 +14,13 @@ RelationshipStateManager.record / get_snapshot / reset。
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import importlib
 import os
 import pathlib
+import secrets
 import sys
 import tempfile
 import time
@@ -80,18 +83,20 @@ from .core.profiles import (
 )
 from .core.repository import JsonRepository
 from .core.request_context import (
+    OWNER_CONVERSATION_FLOW,
     OWNER_RELATIONSHIP,
     PHASE_LLM_REQUEST,
     add_prompt_fragment,
     add_reason,
     ensure_context,
+    get_flag,
     set_artifact,
     set_flag,
 )
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.6.7"
+__version__ = "0.6.8"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -105,6 +110,8 @@ RELATIONSHIP_EVENT_CONTRACT_NAME = "relationship.event"
 RELATIONSHIP_EVENT_CONTRACT_VERSION = "1.0"
 DELIVERY_IDENTITY_CONTRACT_NAME = "relationship.delivery_identity"
 DELIVERY_IDENTITY_CONTRACT_VERSION = "1.0"
+CONTINUITY_IDENTITY_CONTRACT_NAME = "relationship.continuity_identity"
+CONTINUITY_IDENTITY_CONTRACT_VERSION = "1.0"
 _PRIVATE_UMO_MESSAGE_TYPES = frozenset(
     {"friendmessage", "privatemessage", "directmessage"}
 )
@@ -136,6 +143,7 @@ class RelationshipPlugin(Star):
         data_dir = pathlib.Path(StarTools.get_data_dir(PLUGIN_NAME))
         data_dir.mkdir(parents=True, exist_ok=True)
         self._data_dir = data_dir
+        self._continuity_identity_secret = secrets.token_bytes(32)
         self.identity_registry = IdentityRegistry(data_dir / "identity_registry.json")
         self._identity_merge_journal_path = data_dir / _IDENTITY_MERGE_JOURNAL_NAME
         self._identity_write_lock = asyncio.Lock()
@@ -243,6 +251,122 @@ class RelationshipPlugin(Star):
             "permission_identity_mode": "raw_platform_account",
             "exposes_raw_account_ids": False,
         }
+
+    def continuity_identity_contract(self) -> dict[str, object]:
+        """Declare opaque, read-only natural-person equivalence for conversation flow."""
+        return {
+            "name": CONTINUITY_IDENTITY_CONTRACT_NAME,
+            "version": CONTINUITY_IDENTITY_CONTRACT_VERSION,
+            "plugin": PLUGIN_NAME,
+            "capabilities": ("resolve_current_event",),
+            "binding_mode": "admin_verified",
+            "permission_identity_mode": "raw_platform_account",
+            "exposes_raw_account_ids": False,
+            "grants_permission": False,
+            "key_lifetime": "process",
+        }
+
+    async def resolve_continuity_identity(
+        self, event: AstrMessageEvent, req: Any = None
+    ) -> dict[str, object]:
+        """Return an opaque continuity key for one manually bound current account.
+
+        The key is only an equality token for in-memory recent-conversation grouping.
+        It is not an authorization identity and must not be persisted or logged.
+        """
+        try:
+            profile_id = await self._resolve_relationship_profile(event, req)
+        except Exception as exc:
+            self.logger.warning(
+                "[relationship] continuity profile resolution failed: %s",
+                type(exc).__name__,
+            )
+            return self._continuity_identity_denied("profile_resolution_failed")
+
+        async with self._identity_write_lock:
+            if self._identity_transaction_pending():
+                return self._continuity_identity_denied("identity_transaction_pending")
+            resolved, reason = self._resolve_continuity_account(event)
+            if resolved is None:
+                return self._continuity_identity_denied(reason)
+            if self._account_memory_profile(resolved.account) != profile_id:
+                return self._continuity_identity_denied("relationship_profile_mismatch")
+            continuity_key = self._continuity_identity_key(resolved, profile_id)
+
+        return {
+            "version": CONTINUITY_IDENTITY_CONTRACT_VERSION,
+            "verified": True,
+            "reason": "admin_verified_binding",
+            "continuity_key": continuity_key,
+            "relationship_profile_id": profile_id,
+            "binding_mode": "admin_verified",
+            "permission_identity_mode": "raw_platform_account",
+            "grants_permission": False,
+        }
+
+    @staticmethod
+    def _continuity_identity_denied(reason: str) -> dict[str, object]:
+        return {
+            "version": CONTINUITY_IDENTITY_CONTRACT_VERSION,
+            "verified": False,
+            "reason": str(reason or "identity_unavailable"),
+            "grants_permission": False,
+        }
+
+    def _resolve_continuity_account(
+        self, event: AstrMessageEvent
+    ) -> tuple[ResolvedIdentity | None, str]:
+        platforms = self._platform_candidates(event)
+        user_id = self._safe_event_id(event, "get_sender_id")
+        bot_id = self._safe_event_id(event, "get_self_id")
+        if not platforms or not user_id:
+            return None, "identity_scope_required"
+
+        matches: dict[str, ResolvedIdentity] = {}
+        try:
+            for platform_id in platforms:
+                resolved = self.identity_registry.resolve(
+                    platform_candidates=(platform_id,),
+                    user_id=user_id,
+                    bot_id=bot_id,
+                )
+                if resolved is not None:
+                    matches.setdefault(resolved.account.key, resolved)
+        except ValueError:
+            return None, "account_ambiguous"
+        if not matches:
+            return None, "account_unbound"
+        if len(matches) != 1:
+            return None, "account_ambiguous"
+        return next(iter(matches.values())), ""
+
+    def _continuity_identity_key(
+        self, resolved: ResolvedIdentity, relationship_profile_id: str
+    ) -> str:
+        members = sorted(
+            (
+                account.platform_id.casefold(),
+                account.user_id,
+                account.bot_id,
+                account.session_id,
+                account.memory_profile_id,
+            )
+            for account in resolved.person.accounts
+        )
+        payload = json.dumps(
+            {
+                "person_id": resolved.person.person_id,
+                "relationship_profile_id": relationship_profile_id,
+                "account_members": members,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        digest = hmac.new(
+            self._continuity_identity_secret, payload, hashlib.sha256
+        ).hexdigest()
+        return f"relci1_{digest}"
 
     async def resolve_delivery_identity(
         self, person_id: str, recipient_umo: str
@@ -632,6 +756,19 @@ class RelationshipPlugin(Star):
         query = plugin._get_text(event)
         if not query or query.startswith("/"):
             return
+        request_context = ensure_context(event, PHASE_LLM_REQUEST)
+        if get_flag(
+            request_context,
+            OWNER_CONVERSATION_FLOW,
+            "recent_context_selected",
+            False,
+        ):
+            add_reason(
+                request_context,
+                OWNER_RELATIONSHIP,
+                "CROSS_PLATFORM_MEMORY_SKIPPED_RECENT_CONTEXT",
+            )
+            return
         profile_id = await plugin._resolve_relationship_profile(event, req)
         async with plugin._identity_write_lock:
             if plugin._identity_transaction_pending():
@@ -649,7 +786,6 @@ class RelationshipPlugin(Star):
                 return
             identity_snapshot = resolved
 
-        request_context = ensure_context(event, PHASE_LLM_REQUEST)
         bridge = plugin._memory_companion_bridge()
         compose = getattr(bridge, "compose_injection", None)
         if not callable(compose):
@@ -2451,6 +2587,7 @@ class RelationshipPlugin(Star):
         try:
             self.manager._flush()
         finally:
+            self._continuity_identity_secret = secrets.token_bytes(32)
             if RelationshipPlugin._current_instance is self:
                 RelationshipPlugin._current_instance = None
         self.logger.info("[relationship] 插件已卸载，长期状态已保存")

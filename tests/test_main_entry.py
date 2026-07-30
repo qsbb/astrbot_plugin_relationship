@@ -369,6 +369,263 @@ class MainEntryTest(unittest.TestCase):
         self.assertTrue(deletion["success"])
         self.assertIsNone(self.plugin.identity_registry.get("summer"))
 
+    def test_continuity_identity_contract_is_opaque_and_permission_neutral(self) -> None:
+        contract = self.plugin.continuity_identity_contract()
+        self.assertEqual(contract["name"], "relationship.continuity_identity")
+        self.assertEqual(contract["version"], "1.0")
+        self.assertEqual(contract["binding_mode"], "admin_verified")
+        self.assertEqual(contract["key_lifetime"], "process")
+        self.assertFalse(contract["exposes_raw_account_ids"])
+        self.assertFalse(contract["grants_permission"])
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                        "session_id": "qq-main:FriendMessage:user-1",
+                    },
+                    {
+                        "platform_id": "telegram-main",
+                        "user_id": "tg-user",
+                        "bot_id": "tg-bot",
+                        "session_id": "telegram-main:FriendMessage:tg-user",
+                    },
+                ],
+            }
+        )
+
+        qq = _run(self.plugin.resolve_continuity_identity(FakeEvent()))
+        telegram = _run(
+            self.plugin.resolve_continuity_identity(
+                FakeEvent(
+                    bot_id="tg-bot",
+                    sender_id="tg-user",
+                    platform_id="telegram-main",
+                )
+            )
+        )
+
+        self.assertTrue(qq["verified"])
+        self.assertTrue(telegram["verified"])
+        self.assertEqual(qq["continuity_key"], telegram["continuity_key"])
+        self.assertTrue(str(qq["continuity_key"]).startswith("relci1_"))
+        self.assertFalse(qq["grants_permission"])
+        self.assertEqual(qq["permission_identity_mode"], "raw_platform_account")
+        serialized = json.dumps([qq, telegram], ensure_ascii=False)
+        for private_value in (
+            "summer",
+            "心夏",
+            "user-1",
+            "tg-user",
+            "bot-1",
+            "tg-bot",
+            "qq-main",
+            "telegram-main",
+            "FriendMessage",
+        ):
+            self.assertNotIn(private_value, serialized)
+
+    def test_continuity_identity_key_tracks_profile_membership_and_reload(self) -> None:
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        first = _run(self.plugin.resolve_continuity_identity(FakeEvent()))
+
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"},
+                    {
+                        "platform_id": "telegram-main",
+                        "user_id": "tg-user",
+                        "bot_id": "tg-bot",
+                    },
+                ],
+            }
+        )
+        after_binding = _run(self.plugin.resolve_continuity_identity(FakeEvent()))
+        self.assertNotEqual(first["continuity_key"], after_binding["continuity_key"])
+
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "work-account",
+                "display_name": "工作账号",
+                "accounts": [
+                    {
+                        "platform_id": "matrix-main",
+                        "user_id": "matrix-user",
+                        "bot_id": "matrix-bot",
+                    }
+                ],
+            }
+        )
+        source_before = _run(
+            self.plugin.resolve_continuity_identity(
+                FakeEvent(
+                    bot_id="matrix-bot",
+                    sender_id="matrix-user",
+                    platform_id="matrix-main",
+                )
+            )
+        )
+        self.plugin.identity_registry.merge_persons("work-account", "summer")
+        target_after_merge = _run(self.plugin.resolve_continuity_identity(FakeEvent()))
+        source_after_merge = _run(
+            self.plugin.resolve_continuity_identity(
+                FakeEvent(
+                    bot_id="matrix-bot",
+                    sender_id="matrix-user",
+                    platform_id="matrix-main",
+                )
+            )
+        )
+        self.assertEqual(
+            target_after_merge["continuity_key"], source_after_merge["continuity_key"]
+        )
+        self.assertNotEqual(
+            after_binding["continuity_key"], target_after_merge["continuity_key"]
+        )
+        self.assertNotEqual(
+            source_before["continuity_key"], source_after_merge["continuity_key"]
+        )
+
+        reloaded = main.RelationshipPlugin(
+            self.context, {"SAVE_INTERVAL_SECONDS": 0}
+        )
+        self.plugin = reloaded
+        after_reload = _run(reloaded.resolve_continuity_identity(FakeEvent()))
+        self.assertNotEqual(
+            target_after_merge["continuity_key"], after_reload["continuity_key"]
+        )
+
+        reloaded.identity_registry.delete("summer")
+        after_unbind = _run(reloaded.resolve_continuity_identity(FakeEvent()))
+        self.assertFalse(after_unbind["verified"])
+        self.assertEqual(after_unbind["reason"], "account_unbound")
+        self.assertNotIn("continuity_key", after_unbind)
+
+    def test_continuity_identity_is_profile_scoped_and_fails_closed(self) -> None:
+        unbound = _run(self.plugin.resolve_continuity_identity(FakeEvent()))
+        self.assertFalse(unbound["verified"])
+        self.assertEqual(unbound["reason"], "account_unbound")
+
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                        "memory_profile_id": "persona-a",
+                    },
+                    {
+                        "platform_id": "telegram-main",
+                        "user_id": "tg-user",
+                        "bot_id": "tg-bot",
+                        "memory_profile_id": "persona-b",
+                    },
+                ],
+            }
+        )
+        self.plugin._persona_profile_map = {
+            "persona-a": "persona-a",
+            "persona-b": "persona-b",
+        }
+
+        def request(persona_id: str):
+            return types.SimpleNamespace(
+                conversation=types.SimpleNamespace(persona_id=persona_id)
+            )
+
+        profile_a = _run(
+            self.plugin.resolve_continuity_identity(
+                FakeEvent(), request("persona-a")
+            )
+        )
+        profile_b = _run(
+            self.plugin.resolve_continuity_identity(
+                FakeEvent(
+                    bot_id="tg-bot",
+                    sender_id="tg-user",
+                    platform_id="telegram-main",
+                ),
+                request("persona-b"),
+            )
+        )
+        self.assertTrue(profile_a["verified"])
+        self.assertTrue(profile_b["verified"])
+        self.assertNotEqual(profile_a["continuity_key"], profile_b["continuity_key"])
+
+        mismatch = _run(
+            self.plugin.resolve_continuity_identity(
+                FakeEvent(), request("persona-b")
+            )
+        )
+        self.assertFalse(mismatch["verified"])
+        self.assertEqual(mismatch["reason"], "relationship_profile_mismatch")
+
+        journal_path = Path(self._tmp.name) / main._IDENTITY_MERGE_JOURNAL_NAME
+        journal_path.write_text("{}", encoding="utf-8")
+        pending = _run(
+            self.plugin.resolve_continuity_identity(
+                FakeEvent(), request("persona-a")
+            )
+        )
+        self.assertFalse(pending["verified"])
+        self.assertEqual(pending["reason"], "identity_transaction_pending")
+        journal_path.unlink()
+
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "other",
+                "display_name": "另一人",
+                "accounts": [
+                    {
+                        "platform_id": "matrix-main",
+                        "user_id": "shared-user",
+                        "bot_id": "shared-bot",
+                    }
+                ],
+            }
+        )
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "third",
+                "display_name": "第三人",
+                "accounts": [
+                    {
+                        "platform_id": "discord-main",
+                        "user_id": "shared-user",
+                        "bot_id": "shared-bot",
+                    }
+                ],
+            }
+        )
+        ambiguous_event = FakeEvent(
+            bot_id="shared-bot",
+            sender_id="shared-user",
+            platform_id="matrix-main",
+        )
+        ambiguous_event.get_platform_name = lambda: "discord-main"
+        ambiguous = _run(self.plugin.resolve_continuity_identity(ambiguous_event))
+        self.assertFalse(ambiguous["verified"])
+        self.assertEqual(ambiguous["reason"], "account_ambiguous")
+        self.assertNotIn("continuity_key", ambiguous)
+
     def test_relationship_event_contract_records_trusted_semantics(self) -> None:
         contract = self.plugin.relationship_event_contract()
         self.assertEqual(contract["name"], "relationship.event")
@@ -1742,6 +1999,34 @@ class MainEntryTest(unittest.TestCase):
         )
         fragments = context["artifacts"]["relationship"]["prompt_fragments"]
         self.assertNotIn("person_id", fragments[0]["metadata"])
+
+    def test_recent_activity_selection_skips_other_account_memory_bridge(self) -> None:
+        calls: list[str] = []
+
+        class Bridge:
+            @staticmethod
+            async def compose_injection(*args, **kwargs):
+                del args, kwargs
+                calls.append("called")
+                return "不应被读取"
+
+        self.plugin._memory_companion_bridge = lambda: Bridge()
+        req = types.SimpleNamespace(extra_user_content_parts=[], system_prompt="")
+        event = FakeEvent(text="接着刚才的话题")
+        request_context = main.ensure_context(event)
+        main.set_flag(
+            request_context,
+            main.OWNER_CONVERSATION_FLOW,
+            "recent_context_selected",
+            True,
+        )
+
+        _run(self.plugin.on_cross_platform_memory(event, req))
+
+        self.assertEqual(calls, [])
+        self.assertEqual(req.extra_user_content_parts, [])
+        reasons = request_context["diagnostics"]["relationship"]["reasons"]
+        self.assertIn("CROSS_PLATFORM_MEMORY_SKIPPED_RECENT_CONTEXT", reasons)
 
     def test_memory_bridge_reuses_astrbot_loaded_module_instance(self) -> None:
         bridge = object()
