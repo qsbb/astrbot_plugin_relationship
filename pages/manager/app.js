@@ -14,8 +14,8 @@ const CONFIG_GROUPS = [
   { title: "提示词", prefix: "PROMPT_" },
   { title: "跨平台记忆", prefix: "CROSS_PLATFORM_MEMORY_" },
   { title: "策略与持久化", prefix: "POLICY_" },
-  { title: "存储与日志", prefix: "SAVE_" },
-  { title: "存储与日志", prefix: "LOG_" },
+  { title: "数据保存", prefix: "SAVE_" },
+  { title: "排查日志", prefix: "LOG_" },
 ];
 
 let configSchema = {};
@@ -28,9 +28,19 @@ let identityMergeSource = null;
 let identityMergeConfirmTimer = null;
 let pendingDeletePersonId = "";
 let pendingDeleteTimer = null;
+let pendingRelationshipDeleteKey = "";
+let pendingRelationshipDeleteProfileId = "";
+let pendingRelationshipDeleteTimer = null;
 
 const API_ERROR_MESSAGES = {
   RELATIONSHIP_STORAGE_READ_ONLY: "关系数据由更高版本写入，当前版本已暂停账号归属修改；请先升级插件",
+  RESTORE_ACCOUNT_REQUIRED: "这个自然人有多个账号，请先选择由哪个账号承接现有关系",
+  RESTORE_ACCOUNT_NOT_BOUND: "所选账号已不在这个自然人下，请刷新后重试",
+  RESTORE_ACCOUNT_BOT_ID_REQUIRED: "现有关系需要迁回账号，但所选账号缺少 Bot ID；请先编辑补全",
+  RESTORE_ACCOUNT_STATE_CONFLICT: "所选账号已有另一份关系记录，为避免覆盖，本次未解除归属",
+  IDENTITY_TRANSACTION_PENDING: "上一次账号归属变更仍在恢复中，请重启插件完成恢复后再试",
+  WHITELIST_PRESERVE_FAILED: "白名单资格未能安全保留，本次解除已回滚，请检查存储后重试",
+  ONE_RELATIONSHIP_PROFILE_REQUIRED: "一次只能删除一个关系人格，请重新选择",
 };
 
 function $(selector) {
@@ -53,6 +63,34 @@ function formatTime(ts) {
   return Number.isNaN(date.getTime())
     ? "—"
     : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function relationshipDeleteProfiles(user) {
+  const values = Array.isArray(user?.relationship_profile_ids) && user.relationship_profile_ids.length
+    ? user.relationship_profile_ids
+    : [user?.relationship_profile_id || defaultRelationshipProfile];
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function relationshipDeleteKey(user) {
+  const profiles = relationshipDeleteProfiles(user).sort();
+  const identity = user?.person_id || user?.orphaned_person_id
+    || `${user?.quick_account?.bot_id || ""}/${user?.user_id || ""}`;
+  return `${user?.scope_kind || ""}:${identity}:${profiles.join(",")}`;
+}
+
+function relationshipDeleteProfilePicker(profiles, selectedProfile = "") {
+  const options = profiles.map((profileId) => (
+    `<option value="${escapeHtml(profileId)}"${profileId === selectedProfile ? " selected" : ""}>`
+    + `${escapeHtml(profileId)}</option>`
+  )).join("");
+  return `<div class="relationship-delete-confirmation" data-relationship-delete-confirmation>`
+    + `<label><span>选择要删除的关系人格</span>`
+    + `<select data-delete-relationship-profile aria-label="要删除的关系人格">`
+    + `<option value="" disabled${selectedProfile ? "" : " selected"}>请选择关系人格</option>`
+    + `${options}</select></label>`
+    + `<button type="button" data-cancel-delete-relationship>取消</button>`
+    + `<small>本次只删除所选人格的关系记录；其他人格和白名单设置保持不变。</small></div>`;
 }
 
 function toast(message, error = false) {
@@ -131,15 +169,18 @@ function render(payload) {
 
   tbody.innerHTML = users.map((user, index) => {
     const orphaned = Boolean(user.orphaned_person_id);
-    const actionLabel = user.person_id ? "编辑归属" : (orphaned ? "合并历史关系" : "快速归属");
-    const profiles = Array.isArray(user.relationship_profile_ids) && user.relationship_profile_ids.length
-      ? user.relationship_profile_ids
-      : [user.relationship_profile_id || defaultRelationshipProfile];
+    const actionLabel = user.person_id ? "编辑归属" : (orphaned ? "处理历史关系" : "快速归属");
+    const deletePending = pendingRelationshipDeleteKey === relationshipDeleteKey(user);
+    const profiles = relationshipDeleteProfiles(user);
+    const multipleProfiles = profiles.length > 1;
+    const deleteConfirmation = deletePending && multipleProfiles
+      ? relationshipDeleteProfilePicker(profiles, pendingRelationshipDeleteProfileId)
+      : "";
     const profileMarkup = profiles.map((profileId) => (
       `<code class="profile-id">${escapeHtml(profileId)}</code>`
     )).join("");
     const identityHint = orphaned
-      ? `<small class="user-id">${escapeHtml(user.orphaned_person_id)} · 账号归属已删除</small>`
+      ? `<small class="user-id">${escapeHtml(user.orphaned_person_id)} · 待重新归属的历史关系</small>`
       : (user.display_name
         ? `<small class="user-id">${escapeHtml(user.user_id)} · ${user.linked_accounts} 个账号</small>`
         : "");
@@ -151,8 +192,13 @@ function render(payload) {
     + `<td>${user.whitelisted ? '<span class="badge ok">白名单</span>' : '<span class="badge">普通</span>'}</td>`
     + `<td>${user.boundary === "开放" ? '<span class="badge safe">开放</span>' : '<span class="badge warn">谨慎</span>'}</td>`
     + `<td>${formatTime(user.last_event_at)}</td>`
-    + `<td><button type="button" class="quick-edit-command" data-quick-edit="${index}">`
-    + `${actionLabel}</button></td></tr>`);
+    + `<td><div class="row-actions"><button type="button" class="quick-edit-command" data-quick-edit="${index}">`
+    + `${actionLabel}</button><button type="button" class="relationship-delete-command danger-command" `
+    + `data-delete-relationship="${index}" data-confirmed="${deletePending ? "true" : "false"}"`
+    + ` data-awaiting-profile="${deletePending && multipleProfiles && !pendingRelationshipDeleteProfileId ? "true" : "false"}"`
+    + `${deletePending && multipleProfiles && !pendingRelationshipDeleteProfileId ? " disabled" : ""}>`
+    + `${deletePending ? (multipleProfiles ? "确认删除所选人格" : "确认删除关系") : "删除关系"}`
+    + `</button></div>${deleteConfirmation}</td></tr>`);
   }).join("");
 }
 
@@ -171,30 +217,33 @@ async function load() {
 
 function renderConfigField(key, field, value) {
   const id = `cfg-${key}`;
-  const desc = escapeHtml(field.description || key);
-  const label = `<label for="${id}" title="${desc}">${escapeHtml(key)}</label>`;
+  const hintId = `${id}-hint`;
+  const name = escapeHtml(field.description || key);
+  const hint = field.hint ? escapeHtml(field.hint) : "";
+  const describedBy = hint ? ` aria-describedby="${hintId}"` : "";
+  const label = `<label for="${id}">${name}</label>`;
   let input;
   if (field.type === "bool") {
     const checked = value === true || value === "true" ? " checked" : "";
-    input = `<input type="checkbox" id="${id}" data-key="${key}"${checked} />`;
+    input = `<input type="checkbox" id="${id}" data-key="${key}"${describedBy}${checked} />`;
   } else if (field.options) {
     const opts = field.options.map((opt) => (
       `<option value="${escapeHtml(opt)}"${String(value) === String(opt) ? " selected" : ""}>${escapeHtml(opt)}</option>`
     )).join("");
-    input = `<select id="${id}" data-key="${key}">${opts}</select>`;
+    input = `<select id="${id}" data-key="${key}"${describedBy}>${opts}</select>`;
   } else if (field.type === "string") {
     const wideClass = key.endsWith("_MAP") ? " config-text-wide" : "";
-    input = `<input type="text" class="config-text${wideClass}" id="${id}" data-key="${key}" value="${escapeHtml(value)}" />`;
+    input = `<input type="text" class="config-text${wideClass}" id="${id}" data-key="${key}"${describedBy} value="${escapeHtml(value)}" />`;
   } else {
     const step = field.type === "float" ? "any" : "1";
     const min = field.minimum ?? "";
     const max = field.maximum ?? "";
     input = `<input type="number" id="${id}" data-key="${key}" step="${step}"` +
       (min !== "" ? ` min="${min}"` : "") + (max !== "" ? ` max="${max}"` : "") +
-      ` value="${escapeHtml(value)}" />`;
+      describedBy + ` value="${escapeHtml(value)}" />`;
   }
   return `<div class="config-field">${label}<div class="config-input">${input}` +
-    `<span class="config-hint">${desc}</span></div></div>`;
+    `${hint ? `<span class="config-hint" id="${hintId}">${hint}</span>` : ""}</div></div>`;
 }
 
 function renderConfigForm(schema, config) {
@@ -349,7 +398,7 @@ function showIdentityMerge(source) {
   $("#identity-merge-hint").textContent = isAccount
     ? "把这个平台账号及其已有关系合并到已确认的自然人。"
     : (isOrphan
-      ? "把删除归属后保留的历史关系迁移到已确认的自然人。"
+      ? "把旧版本留下、目前没有账号归属的历史关系迁移到已确认的自然人。"
       : "来源身份会被移除；账号、关系和记忆归属会并入目标身份。");
   $("#btn-merge-identity").textContent = isAccount ? "合并账号" : "合并身份";
   renderIdentityMergeTargets();
@@ -389,6 +438,7 @@ function editIdentity(person) {
 
 function activateTab(target) {
   if (target !== "identities") resetIdentityMergeConfirmation();
+  if (target !== "overview") clearRelationshipDeleteConfirmation();
   document.querySelectorAll(".tabs button[data-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === target);
   });
@@ -419,14 +469,14 @@ async function quickEditRelationship(index) {
 
   if (user.orphaned_person_id) {
     resetIdentityEditor(0);
-    $("#identity-editor-title").textContent = "未归属历史关系";
-    $("#person-display-name").value = "账号归属已删除";
+    $("#identity-editor-title").textContent = "待处理历史关系";
+    $("#person-display-name").value = "待重新归属的历史关系";
     $("#person-display-name").readOnly = true;
     $("#person-id").value = user.orphaned_person_id;
     $("#person-id").readOnly = true;
     renderRelationshipProfileOptions(user.relationship_profile_id || defaultRelationshipProfile);
     setInitialPriorAvailability(false, "历史关系不会被初始关系覆盖。");
-    $("#account-list").innerHTML = '<p class="config-loading">账号归属已删除；关系与记忆原始数据仍保留。</p>';
+    $("#account-list").innerHTML = '<p class="config-loading">这是旧版本留下的未归属关系，可合并到确认无误的自然人；记忆原始数据不会在这里改动。</p>';
     $("#btn-add-account").hidden = true;
     $("#btn-save-person").hidden = true;
     showIdentityMerge({ type: "orphan", source_person_id: user.orphaned_person_id });
@@ -478,7 +528,7 @@ function armDeleteIdentity(personId) {
   clearTimeout(pendingDeleteTimer);
   pendingDeleteTimer = setTimeout(() => clearDeleteConfirmation(), 8000);
   renderIdentityList();
-  toast("请在 8 秒内再次点击“确认删除”；关系和记忆原始数据不会被删除");
+  toast("请先确认关系迁回账号，再在 8 秒内点击“确认解除”；原有白名单资格和记忆数据都会保留");
 }
 
 function renderIdentityList() {
@@ -489,16 +539,27 @@ function renderIdentityList() {
   }
   list.innerHTML = identities.map((person) => {
     const pending = pendingDeletePersonId === person.person_id;
+    const accounts = person.accounts || [];
     const mergeButton = identities.length > 1
       ? '<button type="button" data-action="merge">合并</button>'
       : "";
+    const restoreOptions = accounts.map((account, index) => {
+      const label = account.label || `${account.platform_id} / ${account.user_id}`;
+      const botHint = account.bot_id ? ` · Bot ${account.bot_id}` : " · 未填写 Bot ID";
+      return `<option value="${index}">${escapeHtml(label + botHint)}</option>`;
+    }).join("");
+    const restorePicker = pending
+      ? `<div class="unbind-confirmation"><label>现有关系迁回到`
+        + `<select data-unbind-target>${restoreOptions}</select></label>`
+        + `<small>只迁回所选账号，其他账号解除归属后从各自的新关系开始；原有白名单资格会保留。</small></div>`
+      : "";
     return (`<div class="identity-item" data-person-id="${escapeHtml(person.person_id)}">`
       + `<div><strong>${escapeHtml(person.display_name)}</strong><span>${escapeHtml(person.person_id)}</span></div>`
-      + `<span class="account-count">${(person.accounts || []).length} 个账号</span>`
+      + `<span class="account-count">${accounts.length} 个账号</span>`
       + `<div class="identity-actions"><button type="button" data-action="edit">编辑</button>`
       + mergeButton
       + `<button type="button" data-action="${pending ? "confirm-delete" : "delete"}" class="danger-command">`
-      + `${pending ? "确认删除" : "删除"}</button></div></div>`);
+      + `${pending ? "确认解除" : "解除归属"}</button></div>${restorePicker}</div>`);
   }).join("");
 }
 
@@ -628,17 +689,122 @@ async function mergeIdentity() {
 async function deleteIdentity(personId, button) {
   const person = identities.find((item) => item.person_id === personId);
   if (!person) return;
+  const item = button.closest("[data-person-id]");
+  const targetIndex = Number(item?.querySelector("[data-unbind-target]")?.value ?? 0);
+  const restoreAccount = (person.accounts || [])[targetIndex];
+  if (!restoreAccount) {
+    toast("没有可承接关系的账号，请先编辑账号归属", true);
+    return;
+  }
   button.disabled = true;
-  button.textContent = "删除中…";
+  button.textContent = "解除中…";
   clearDeleteConfirmation(false);
   try {
-    await apiPost("identity-delete", { person_id: personId });
+    const result = await apiPost("identity-delete", {
+      person_id: personId,
+      restore_account: {
+        platform_id: restoreAccount.platform_id,
+        user_id: restoreAccount.user_id,
+      },
+    });
     await Promise.all([loadIdentities(), load()]);
     resetIdentityEditor();
-    toast("账号归属已删除；关系和记忆原始数据仍保留");
+    const target = result?.restored_account?.label
+      || `${result?.restored_account?.platform_id || "账号"} / ${result?.restored_account?.user_id || ""}`;
+    const aliases = Array.isArray(result?.whitelist_aliases_added)
+      ? result.whitelist_aliases_added.length
+      : 0;
+    const whitelistNote = aliases
+      ? `；原有白名单资格已保留，并补充了 ${aliases} 个账号写法`
+      : "；原有白名单资格保持不变";
+    toast(result?.state_migrated
+      ? `自然人归属已解除，现有关系已迁回 ${target}${whitelistNote}`
+      : `自然人归属已解除；当前没有需要迁移的关系${whitelistNote}`);
   } catch (error) {
-    toast(`删除失败：${error?.message || String(error)}`, true);
+    toast(`解除归属失败：${error?.message || String(error)}`, true);
     renderIdentityList();
+  }
+}
+
+function clearRelationshipDeleteConfirmation() {
+  pendingRelationshipDeleteKey = "";
+  pendingRelationshipDeleteProfileId = "";
+  clearTimeout(pendingRelationshipDeleteTimer);
+  pendingRelationshipDeleteTimer = null;
+  document.querySelectorAll("[data-relationship-delete-confirmation]").forEach((element) => element.remove());
+  document.querySelectorAll("[data-delete-relationship]").forEach((button) => {
+    button.disabled = false;
+    button.dataset.confirmed = "false";
+    button.dataset.awaitingProfile = "false";
+    button.textContent = "删除关系";
+  });
+}
+
+function expireRelationshipDeleteConfirmation() {
+  if (!pendingRelationshipDeleteKey) return;
+  clearRelationshipDeleteConfirmation();
+  toast("删除关系确认已取消，请重新选择要删除的人格");
+}
+
+function armRelationshipDelete(index, button) {
+  const user = overviewUsers[index];
+  if (!user) return;
+  const profiles = relationshipDeleteProfiles(user);
+  const multipleProfiles = profiles.length > 1;
+  clearRelationshipDeleteConfirmation();
+  pendingRelationshipDeleteKey = relationshipDeleteKey(user);
+  button.dataset.confirmed = "true";
+  button.textContent = multipleProfiles ? "确认删除所选人格" : "确认删除关系";
+  if (multipleProfiles) {
+    button.disabled = true;
+    button.dataset.awaitingProfile = "true";
+    button.closest(".row-actions")?.insertAdjacentHTML(
+      "afterend",
+      relationshipDeleteProfilePicker(profiles),
+    );
+  }
+  pendingRelationshipDeleteTimer = setTimeout(expireRelationshipDeleteConfirmation, 8000);
+  toast(multipleProfiles
+    ? "请选择一个关系人格，再次点击“确认删除所选人格”；本次不会改动其他人格"
+    : `请在 8 秒内再次点击“确认删除关系”；本次只删除人格“${profiles[0]}”的关系记录，白名单设置不变`);
+}
+
+async function deleteRelationship(index, button) {
+  const user = overviewUsers[index];
+  if (!user) return;
+  const profiles = relationshipDeleteProfiles(user);
+  const multipleProfiles = profiles.length > 1;
+  const picker = button.closest("td")?.querySelector("[data-delete-relationship-profile]");
+  const selectedProfile = multipleProfiles
+    ? String(picker?.value || pendingRelationshipDeleteProfileId || "").trim()
+    : profiles[0];
+  if (!selectedProfile || !profiles.includes(selectedProfile)) {
+    toast("请选择要删除的关系人格；本次只会删除所选人格", true);
+    return;
+  }
+  const personId = user.person_id || user.orphaned_person_id || "";
+  const payload = {
+    scope_kind: user.scope_kind,
+    relationship_profile_ids: [selectedProfile],
+  };
+  if (user.scope_kind === "person") {
+    payload.person_id = personId;
+  } else {
+    payload.bot_id = user.quick_account?.bot_id || "";
+    payload.user_id = user.user_id || "";
+  }
+  // Before sending the request, clear the timer and cancel control so a slow
+  // persistence operation cannot report a false cancel.
+  clearRelationshipDeleteConfirmation();
+  button.disabled = true;
+  button.textContent = "删除中…";
+  try {
+    await apiPost("relationship-delete", payload);
+    await load();
+    toast(`人格“${selectedProfile}”的关系记录已删除；其他人格和高好感白名单设置未改动`);
+  } catch (error) {
+    clearRelationshipDeleteConfirmation();
+    toast(`删除关系失败：${error?.message || String(error)}`, true);
   }
 }
 
@@ -693,9 +859,36 @@ async function init() {
   $("#btn-refresh").addEventListener("click", load);
   $("#btn-save-config").addEventListener("click", saveConfig);
   $("#btn-reset-config").addEventListener("click", resetConfigForm);
+  $("#relation-tbody").addEventListener("change", (event) => {
+    const picker = event.target.closest("[data-delete-relationship-profile]");
+    if (picker) {
+      pendingRelationshipDeleteProfileId = picker.value;
+      const deleteButton = picker.closest("td")?.querySelector("[data-delete-relationship]");
+      if (deleteButton) {
+        deleteButton.disabled = !picker.value;
+        deleteButton.dataset.awaitingProfile = picker.value ? "false" : "true";
+      }
+    }
+  });
   $("#relation-tbody").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-quick-edit]");
-    if (button) quickEditRelationship(Number(button.dataset.quickEdit));
+    const cancelButton = event.target.closest("[data-cancel-delete-relationship]");
+    if (cancelButton) {
+      clearRelationshipDeleteConfirmation();
+      toast("已取消删除关系");
+      return;
+    }
+    const deleteButton = event.target.closest("[data-delete-relationship]");
+    if (deleteButton) {
+      const index = Number(deleteButton.dataset.deleteRelationship);
+      if (deleteButton.dataset.confirmed === "true") {
+        deleteRelationship(index, deleteButton);
+      } else {
+        armRelationshipDelete(index, deleteButton);
+      }
+      return;
+    }
+    const editButton = event.target.closest("[data-quick-edit]");
+    if (editButton) quickEditRelationship(Number(editButton.dataset.quickEdit));
   });
   await load();
   await loadConfig();

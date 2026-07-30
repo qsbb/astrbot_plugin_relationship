@@ -282,6 +282,8 @@ class JsonRepository:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(tmp_name, self._path)
         except OSError:
             try:

@@ -1,276 +1,324 @@
 {
   "MOOD_ENABLED": {
     "type": "bool",
-    "description": "启用短期情绪与回复意愿追踪",
+    "description": "情绪追踪总开关",
+    "hint": "开启后会根据近期互动频率、重复内容和连续对话计算回复意愿，并生成语气或静默建议；关闭后只停用这部分短期判断，长期好感、信任和熟悉度仍会正常记录。",
     "default": true
   },
   "MOOD_WINDOW_SECONDS": {
     "type": "int",
-    "description": "情绪滑动窗口时长（秒），窗口外互动自然遗忘",
+    "description": "情绪统计窗口（秒）",
+    "hint": "只统计最近这段时间内的互动，超出窗口的旧消息会自然移出统计。时间越长，先前的频繁聊天影响越久。",
     "default": 300,
     "minimum": 10,
     "maximum": 86400
   },
   "MOOD_FREQUENT_AFTER": {
     "type": "int",
-    "description": "窗口内互动超过该次数后开始产生疲劳感",
+    "description": "高频互动起算次数",
+    "hint": "统计窗口内的互动次数超过这个值后，才会因聊天过密降低回复意愿。数值越大，越不容易被频繁互动影响。",
     "default": 6
   },
   "MOOD_STREAK_AFTER": {
     "type": "int",
-    "description": "连续对话超过该轮数后开始产生疲劳感",
+    "description": "连续对话起算轮数",
+    "hint": "连续对话轮数超过这个值后，才会开始降低回复意愿。数值越大，Bot 能连续聊更久才会显得疲惫。",
     "default": 8
   },
   "MOOD_STREAK_GAP_SECONDS": {
     "type": "int",
-    "description": "两条消息间隔小于该秒数视为连续对话",
+    "description": "连续对话间隔（秒）",
+    "hint": "相邻两条消息间隔不超过这个时间，就算作同一段连续对话；超过后会重新从第一轮计算。",
     "default": 90
   },
   "MOOD_LAZY_SCORE": {
     "type": "int",
-    "description": "回复意愿低于等于该分数进入 lazy 档（0-100）",
+    "description": "简短回复阈值",
+    "hint": "回复意愿降到这个分数或更低时，会建议语气更随意、回答更简短，但仍要完整回应必要信息。按 0 到 100 理解，数值越高越容易进入该状态。",
     "default": 72
   },
   "MOOD_ANNOYED_SCORE": {
     "type": "int",
-    "description": "回复意愿低于等于该分数进入 annoyed 档（0-100）",
+    "description": "克制回复阈值",
+    "hint": "回复意愿降到这个分数或更低时，会建议语气更克制、只说必要内容，但不得攻击、讽刺或故意误导。按 0 到 100 理解。",
     "default": 45
   },
   "MOOD_SILENCE_SCORE": {
     "type": "int",
-    "description": "回复意愿低于等于该分数时允许概率硬静默（0-100）",
+    "description": "静默建议阈值",
+    "hint": "回复意愿降到这个分数或更低时，情才可能给出静默建议。情不会直接阻止回复，最终是否发送由言根据完整对话规则决定。",
     "default": 25
   },
   "MOOD_SILENCE_CHANCE_PERCENT": {
     "type": "int",
-    "description": "硬静默触发概率（百分比，0 表示从不硬静默）",
+    "description": "静默建议概率（%）",
+    "hint": "满足静默建议阈值后，本轮产生静默建议的概率；0 表示从不给建议，100 表示每次都给建议。它仍只是交给言参考，不代表一定不发送。",
     "default": 45
   },
   "MOOD_MAX_CONSECUTIVE_SILENCES": {
     "type": "int",
-    "description": "连续硬静默上限，0 表示不限制",
+    "description": "连续静默建议上限",
+    "hint": "最多连续给出多少次静默建议，达到上限后会恢复正常回复建议；0 表示不限制。最终是否发送仍由言决定。",
     "default": 2
   },
   "AFFECT_ENABLED": {
     "type": "bool",
-    "description": "启用由可信语义事件驱动、按会话隔离并自然衰减的短期亲近或戒备倾向",
+    "description": "短期态度总开关",
+    "hint": "开启后，可信工作流确认的正向或负向事件会让当前会话暂时更亲近或更戒备，并随时间恢复；普通聊天内容不会自行触发，也不会直接改动长期关系分数。",
     "default": true
   },
   "AFFECT_HALF_LIFE_SECONDS": {
     "type": "float",
-    "description": "短期亲近与戒备倾向的衰减半衰期（秒）",
+    "description": "短期态度半衰期（秒）",
+    "hint": "经过这么长时间，已经积累的短期亲近或戒备强度大约剩下一半。数值越大，一次事件对后续语气的影响持续越久。",
     "default": 1800,
     "minimum": 10,
     "maximum": 604800
   },
   "AFFECT_POSITIVE_GAIN": {
     "type": "float",
-    "description": "单次满强度正向语义事件带来的短期亲近增量",
+    "description": "正向事件亲近增量",
+    "hint": "一次证据充分的正向事件最多增加多少短期亲近感；证据较弱时会按可信度和严重度折算，不会直接增加长期好感。",
     "default": 24,
     "minimum": 0,
     "maximum": 100
   },
   "AFFECT_NEGATIVE_GAIN": {
     "type": "float",
-    "description": "单次满强度负向语义事件带来的短期戒备增量",
+    "description": "负向事件戒备增量",
+    "hint": "一次证据充分的负向事件最多增加多少短期戒备感；证据较弱时会按可信度和严重度折算，影响会随时间自然减弱。",
     "default": 32,
     "minimum": 0,
     "maximum": 100
   },
   "AFFECT_STANCE_THRESHOLD": {
     "type": "float",
-    "description": "短期亲近或戒备开始影响语气的触发阈值",
+    "description": "态度影响语气阈值",
+    "hint": "短期亲近或戒备强度达到这个值后，才会改变本轮语气建议；低于这个值时只保留状态，不影响表达。",
     "default": 15,
     "minimum": 0,
     "maximum": 100
   },
   "DYNAMICS_EARLY_BOOST": {
     "type": "float",
-    "description": "关系早期对可信语义事件的额外可塑性增幅；会随证据积累平滑衰减",
+    "description": "新关系额外增幅",
+    "hint": "关系刚建立时，可信语义事件可获得的额外权重。0.25 表示最初最多额外增加 25%，之后会随着可信证据积累逐渐减小；填 0 可关闭这项早期增幅。",
     "default": 0.25,
     "minimum": 0,
     "maximum": 1
   },
   "DYNAMICS_EVIDENCE_HALF_LIFE": {
     "type": "float",
-    "description": "早期可塑性增幅减半所需的累计可信语义证据量",
+    "description": "新关系增幅减半证据量",
+    "hint": "累计可信语义证据达到这个量时，新关系的额外增幅会降到最初的一半。数值越大，关系早期较敏感的阶段持续越久。",
     "default": 12,
     "minimum": 0.1,
     "maximum": 10000
   },
   "RELATIONSHIP_DEFAULT_PROFILE_ID": {
     "type": "string",
-    "description": "无法取得 AstrBot Persona ID 时使用的默认关系档案 ID",
+    "description": "默认关系人格",
+    "hint": "本轮无法取得 AstrBot Persona ID，或该 Persona 没有单独映射时，使用这里填写的关系人格 ID；留空或无效值会回退到 default。",
     "default": "default"
   },
   "RELATIONSHIP_LEGACY_PROFILE_ID": {
     "type": "string",
-    "description": "旧数据只迁入此关系档案；修改仅在首次 v3 -> v4 迁移前有效，留空回退 default",
+    "description": "旧数据迁入关系人格",
+    "hint": "只决定首次把 v3 及更早的历史关系迁入哪个关系人格。迁移完成后再改不会重新分配旧数据；修改后需要重启，留空会回退到 default。",
     "default": "default"
   },
   "RELATIONSHIP_PERSONA_PROFILE_MAP": {
     "type": "string",
-    "description": "AstrBot Persona 到关系档案的映射，格式 persona_id=profile_id；多项可用逗号、分号或换行分隔",
+    "description": "人格映射",
+    "hint": "把 AstrBot Persona 指定到关系人格，格式为 persona_id=profile_id。多项可用英文逗号、分号或换行分隔，例如 daily=default,work=work。",
     "default": ""
   },
   "AFFINITY_MESSAGE_GAIN": {
     "type": "float",
-    "description": "普通有效消息的好感微增量",
+    "description": "普通消息好感增量",
+    "hint": "一条符合条件的普通消息最多增加多少好感；实际还会受加分间隔、每日上限、白名单和关系区间上限约束，不能靠刷消息无限加分。",
     "default": 0.2
   },
   "AFFINITY_PRAISE_GAIN": {
     "type": "float",
-    "description": "被夸奖/正向互动的好感增量",
+    "description": "夸奖事件好感增量",
+    "hint": "可信工作流确认一次夸奖或正向互动后，基础好感增加量。实际变化会按证据强度折算，并受每日额度和关系门槛限制。",
     "default": 1.5
   },
   "AFFINITY_HELP_RECEIVED_GAIN": {
     "type": "float",
-    "description": "得到用户帮助（纠错、补充信息等）的好感增量",
+    "description": "用户帮助事件好感增量",
+    "hint": "可信工作流确认用户提供了有效帮助，例如纠错或补充关键信息后，基础好感增加量；不会仅凭聊天中的自称自动触发。",
     "default": 2.0
   },
   "AFFINITY_OFFENSE_PENALTY": {
     "type": "float",
-    "description": "被冒犯时的好感减量（负数）",
+    "description": "冒犯事件好感减量",
+    "hint": "可信工作流确认一次冒犯事件后，好感的基础变化量。这里通常填写负数，绝对值越大，一次事件降低得越多。",
     "default": -2.0
   },
   "AFFINITY_DAILY_CAP": {
     "type": "float",
-    "description": "每日好感正向变化额度，与负向额度独立，防止刷分",
+    "description": "每日好感增加上限",
+    "hint": "同一关系一天内累计最多增加多少好感，超过的正向变化会被截住。增加和减少分别计算，避免短时间刷分。",
     "default": 5.0
   },
   "AFFINITY_DAILY_NEGATIVE_CAP": {
     "type": "float",
-    "description": "每日好感负向变化额度（绝对值），与正向额度独立",
+    "description": "每日好感减少上限",
+    "hint": "同一关系一天内累计最多减少多少好感，填写正的额度值。它与每日增加上限分别计算，避免一次集中事件造成过大波动。",
     "default": 5.0
   },
   "AFFINITY_MESSAGE_COOLDOWN_SECONDS": {
     "type": "float",
-    "description": "普通消息好感加成的最小间隔（秒）",
+    "description": "普通消息加分间隔（秒）",
+    "hint": "同一关系的两次普通消息好感加分至少要间隔这么久，间隔内继续聊天不会重复加分；填 0 表示每条有效消息都可以参与计算。",
     "default": 60.0
   },
   "AFFINITY_WHITELIST_USER_IDS": {
     "type": "string",
-    "description": "高好感白名单，多个用英文逗号分隔；profile_id/person_id 只命中指定关系人格，裸 person_id 兼容为所有人格，未绑定账号可填平台 UID",
+    "description": "高好感白名单",
+    "hint": "只有名单内且信任、熟悉度达标的关系才能进入高好感区。多项用英文逗号分隔；profile_id/person_id 只匹配指定关系人格，单独填写 person_id 会匹配其所有人格，未绑定账号可填平台 UID。解除自然人归属时会保留原项，并按需补上原账号 UID，避免白名单资格丢失。",
     "default": ""
   },
   "AFFINITY_HIGH_THRESHOLD": {
     "type": "float",
-    "description": "高好感区起始分数（建议 75）",
+    "description": "高好感区起点",
+    "hint": "好感达到这个分数才进入高好感区；同时仍需在白名单内，并满足下方的信任和熟悉度门槛。默认 75。",
     "default": 75.0
   },
   "AFFINITY_NON_WHITELIST_CEILING": {
     "type": "float",
-    "description": "非白名单用户的好感上限（建议 68，保持在朋友区）",
+    "description": "非白名单好感上限",
+    "hint": "不在高好感白名单内的用户，好感最多增长到这个分数。默认 68，使普通关系停留在朋友区，不会只靠聊天进入高好感区。",
     "default": 68.0
   },
   "AFFINITY_WHITELIST_TRUST_GATE": {
     "type": "float",
-    "description": "白名单进入高好感区所需的信任门槛",
+    "description": "高好感信任门槛",
+    "hint": "白名单关系的信任分数至少达到这个值，才允许继续进入高好感区；未达到时，正向事件和普通聊天仍会受到限制。",
     "default": 65.0
   },
   "AFFINITY_WHITELIST_FAMILIARITY_GATE": {
     "type": "float",
-    "description": "白名单进入高好感区所需的熟悉度门槛",
+    "description": "高好感熟悉度门槛",
+    "hint": "白名单关系的熟悉度至少达到这个值，才允许继续进入高好感区；它与信任门槛需要同时满足。",
     "default": 25.0
   },
   "TRUST_PROMISE_KEPT_GAIN": {
     "type": "float",
-    "description": "承诺兑现的信任增量（非负，最大 100）",
+    "description": "履约事件信任增量",
+    "hint": "可信工作流确认承诺已经兑现后，可靠性和诚信各增加的基础值。普通聊天中的口头自称不能作为履约证据。",
     "default": 3.0,
     "minimum": 0.0,
     "maximum": 100.0
   },
   "TRUST_PROMISE_BROKEN_PENALTY": {
     "type": "float",
-    "description": "承诺被打破/欺骗的信任减量（负数）",
+    "description": "失约或欺骗信任减量",
+    "hint": "可信工作流确认失约或欺骗事实后，可靠性和诚信各自的基础变化量。这里应填写负数，绝对值越大，一次事件降低得越多。",
     "default": -5.0,
     "minimum": -100.0,
     "maximum": 0.0
   },
   "TRUST_OFFENSE_PENALTY": {
     "type": "float",
-    "description": "冒犯对信任的轻微减量（负数）",
+    "description": "冒犯事件信任减量",
+    "hint": "可信工作流确认冒犯事实后，善意信任的基础变化量。这里应填写负数；它与好感的冒犯减量分开计算。",
     "default": -1.0,
     "minimum": -100.0,
     "maximum": 0.0
   },
   "FAMILIARITY_BASE_GAIN": {
     "type": "float",
-    "description": "熟悉度为 0 时单次有效互动的增量（0-100）",
+    "description": "单次互动熟悉度增量",
+    "hint": "熟悉度为 0 时，一次有效互动增加的基础值。随着越来越熟，实际增量会按递减曲线变小；命令消息不计入熟悉度。",
     "default": 0.8,
     "minimum": 0.0,
     "maximum": 100.0
   },
   "FAMILIARITY_DIMINISH_CURVE": {
     "type": "float",
-    "description": "熟悉度递减曲线指数，必须为正数",
+    "description": "熟悉度递减曲线",
+    "hint": "控制熟悉度越高时，后续增长放慢得有多明显。数值越大，关系后期增长越慢；必须大于 0。",
     "default": 2.0,
     "minimum": 0.01,
     "maximum": 10.0
   },
   "FAMILIARITY_COOLDOWN_SECONDS": {
     "type": "float",
-    "description": "熟悉度有效互动最小间隔（秒，0-86400）",
+    "description": "熟悉度增加间隔（秒）",
+    "hint": "同一关系的两次熟悉度增长至少要间隔这么久，间隔内继续聊天不会重复增加；填 0 表示不设间隔。",
     "default": 120.0,
     "minimum": 0.0,
     "maximum": 86400.0
   },
   "DECAY_AFFINITY_REGRESSION_PER_DAY": {
     "type": "float",
-    "description": "好感每天向中位数回归的比例（0-1）",
+    "description": "好感每日回归比例",
+    "hint": "长期没有互动时，好感会在下次事件到来时向中间值 50 回归。0.02 表示每天收回当前偏离量的 2%，不是每天直接减 2 分；0 表示不回归。",
     "default": 0.02,
     "minimum": 0.0,
     "maximum": 1.0
   },
   "DECAY_TRUST_REGRESSION_PER_DAY": {
     "type": "float",
-    "description": "信任每天向中位数回归的比例（0-1）",
+    "description": "信任每日回归比例",
+    "hint": "长期没有互动时，各项信任会在下次事件到来时向中间值 50 回归。0.005 表示每天收回当前偏离量的 0.5%；熟悉度不受此项影响。",
     "default": 0.005,
     "minimum": 0.0,
     "maximum": 1.0
   },
   "POLICY_ENABLE_PROMPT_FRAGMENT": {
     "type": "bool",
-    "description": "是否在只读快照中生成兼容提示片段（插件入口不会自动注入）",
+    "description": "生成关系提示片段",
+    "hint": "开启后会在只读关系快照中生成一段中文表达建议，供本插件注入或其他兼容插件读取；关闭只是不生成这段片段，不会停止关系计算。",
     "default": true
   },
   "POLICY_ENABLE_STYLE_HINT": {
     "type": "bool",
-    "description": "是否生成 response_style 语气/长度建议",
+    "description": "生成表达风格建议",
+    "hint": "开启后会根据关系和短期状态给出语气、长度与主动性建议；关闭后这些建议保持普通值，但好感、信任、熟悉度等状态仍照常计算。",
     "default": true
   },
   "PROMPT_INJECT_ENABLED": {
     "type": "bool",
-    "description": "是否把关系表达约束注入本轮 LLM 请求（关闭后仅保留只读建议）",
+    "description": "注入关系表达约束",
+    "hint": "开启后会把关系相关的语气、篇幅和主动性约束加入本轮 LLM 请求；它不改变事实判断、权限或安全边界。关闭后仍保留只读关系快照。",
     "default": true
   },
   "CROSS_PLATFORM_MEMORY_ENABLED": {
     "type": "bool",
-    "description": "私聊时从已验证为同一自然人的其他平台账号读取相关 Memory Companion 记忆；不改变权限身份",
+    "description": "跨平台记忆读取",
+    "hint": "开启后，私聊时可从已确认属于同一自然人的其他平台账号只读召回相关 Memory Companion 记忆。它不会把其他账号的权限、主人身份或黑名单状态带到当前会话。",
     "default": true
   },
   "CROSS_PLATFORM_MEMORY_TOP_K": {
     "type": "int",
-    "description": "每个已绑定账号最多召回的跨平台记忆数量",
+    "description": "每个账号记忆召回上限",
+    "hint": "从每个已绑定的其他账号最多取回多少条相关记忆。数值越大，可参考的信息越多，但也会占用更多本轮上下文。",
     "default": 3,
     "minimum": 1,
     "maximum": 10
   },
   "CROSS_PLATFORM_MEMORY_MAX_CHARS": {
     "type": "int",
-    "description": "单轮跨平台补充记忆的总字符上限",
+    "description": "单轮补充记忆字符上限",
+    "hint": "一轮对话中，所有跨平台账号补充记忆合计最多使用多少字符。达到上限后会截断，避免记忆内容挤占过多对话上下文。",
     "default": 1200,
     "minimum": 200,
     "maximum": 8000
   },
   "SAVE_INTERVAL_SECONDS": {
     "type": "float",
-    "description": "长期状态持久化节流间隔（秒），0 表示每次事件都落盘",
+    "description": "状态保存间隔（秒）",
+    "hint": "长期关系状态写入磁盘的最小间隔。数值越大，磁盘写入越少，但异常退出时尚未保存的最近变化可能丢失；填 0 表示每次事件都立即保存。",
     "default": 30.0
   },
   "LOG_LEVEL": {
     "type": "string",
-    "description": "插件日志级别",
+    "description": "日志级别",
+    "hint": "INFO 只记录正常运行所需信息；DEBUG 会输出更多排查细节，适合临时诊断问题，长期开启会产生更多日志。",
     "default": "INFO",
     "options": ["DEBUG", "INFO"]
   }

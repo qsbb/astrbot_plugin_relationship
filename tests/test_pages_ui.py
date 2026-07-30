@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
@@ -18,6 +19,9 @@ class PagesUiTest(unittest.TestCase):
         self.html = (PAGES_DIR / "index.html").read_text(encoding="utf-8")
         self.js = (PAGES_DIR / "app.js").read_text(encoding="utf-8")
         self.css = (PAGES_DIR / "style.css").read_text(encoding="utf-8")
+        self.schema = json.loads(
+            (PAGES_DIR.parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
+        )
 
     def test_html_has_settings_tab(self) -> None:
         self.assertIn('data-tab="settings"', self.html)
@@ -68,7 +72,59 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("function armDeleteIdentity(", self.js)
         self.assertIn('data-action="${pending ? "confirm-delete" : "delete"}"', self.js)
         self.assertIn('apiPost("identity-delete"', self.js)
+        self.assertIn("restore_account:", self.js)
+        self.assertIn("现有关系迁回到", self.js)
+        self.assertIn("解除归属", self.js)
         self.assertIn("Promise.all([loadIdentities(), load()])", self.js)
+
+    def test_relationship_delete_is_separate_from_whitelist(self) -> None:
+        self.assertIn('apiPost("relationship-delete"', self.js)
+        self.assertIn("确认删除关系", self.js)
+        self.assertIn("白名单设置保持不变", self.js)
+        self.assertNotIn('apiPost("config", { AFFINITY_WHITELIST_USER_IDS', self.js)
+
+    def test_multi_profile_relationship_delete_requires_one_explicit_profile(self) -> None:
+        self.assertIn("function relationshipDeleteProfiles(", self.js)
+        self.assertIn("function relationshipDeleteProfilePicker(", self.js)
+        self.assertIn("data-delete-relationship-profile", self.js)
+        self.assertIn('<option value="" disabled', self.js)
+        self.assertIn("请选择要删除的关系人格", self.js)
+        self.assertIn("!profiles.includes(selectedProfile)", self.js)
+        self.assertIn("relationship_profile_ids: [selectedProfile]", self.js)
+        self.assertNotIn("relationship_profile_ids: profiles", self.js)
+        self.assertIn("button.disabled = true", self.js)
+        self.assertIn("deleteButton.disabled = !picker.value", self.js)
+        self.assertIn('button.dataset.awaitingProfile = "true"', self.js)
+        self.assertIn('[data-awaiting-profile="true"]:disabled', self.css)
+        self.assertIn("本次只删除所选人格", self.js)
+        for forbidden_copy in ("删除全部关系", "删除所有关系人格", "一次删除全部"):
+            self.assertNotIn(forbidden_copy, self.js)
+
+    def test_single_profile_relationship_delete_keeps_simple_confirmation(self) -> None:
+        self.assertIn("const multipleProfiles = profiles.length > 1;", self.js)
+        self.assertIn('multipleProfiles ? "确认删除所选人格" : "确认删除关系"', self.js)
+        self.assertIn(": profiles[0];", self.js)
+
+    def test_relationship_delete_clears_confirmation_before_request(self) -> None:
+        start = self.js.index("async function deleteRelationship(")
+        request = self.js.index('await apiPost("relationship-delete"', start)
+        before_request = self.js[start:request]
+        self.assertIn("clearRelationshipDeleteConfirmation();", before_request)
+        self.assertIn('button.textContent = "删除中…";', before_request)
+
+    def test_relationship_delete_cancel_and_timeout_clear_profile_picker(self) -> None:
+        self.assertIn("data-cancel-delete-relationship", self.js)
+        self.assertIn("function expireRelationshipDeleteConfirmation()", self.js)
+        self.assertIn("setTimeout(expireRelationshipDeleteConfirmation, 8000)", self.js)
+        self.assertIn(
+            'querySelectorAll("[data-relationship-delete-confirmation]")', self.js
+        )
+        self.assertIn(
+            'if (target !== "overview") clearRelationshipDeleteConfirmation();',
+            self.js,
+        )
+        self.assertIn("pendingRelationshipDeleteProfileId = picker.value", self.js)
+        self.assertIn(".relationship-delete-confirmation", self.css)
 
     def test_js_has_tab_switching(self) -> None:
         self.assertIn("function initTabs()", self.js)
@@ -129,9 +185,9 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("该账号已有互动，将保留现有关系", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.6.4", self.html)
-        self.assertIn("app.js?v=0.6.4", self.html)
-        self.assertIn("rev=identity-merge-2", self.html)
+        self.assertIn("style.css?v=0.6.5", self.html)
+        self.assertIn("app.js?v=0.6.5", self.html)
+        self.assertIn("rev=relationship-unbind-1", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)
@@ -147,11 +203,25 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn(".config-hint", self.css)
         self.assertIn("button.primary", self.css)
 
+    def test_settings_use_chinese_names_and_plain_hints(self) -> None:
+        self.assertEqual(len(self.schema), 48)
+        for key, field in self.schema.items():
+            self.assertTrue(field.get("description"), key)
+            self.assertTrue(field.get("hint"), key)
+            self.assertNotEqual(field["description"], key)
+        self.assertIn("field.description || key", self.js)
+        self.assertIn("field.hint ? escapeHtml(field.hint)", self.js)
+        self.assertNotIn("${escapeHtml(key)}</label>", self.js)
+        self.assertIn('data-key="${key}"', self.js)
+
     def test_css_has_identity_editor_styles(self) -> None:
         self.assertIn(".identity-grid", self.css)
         self.assertIn(".account-row", self.css)
         self.assertIn(".identity-item", self.css)
         self.assertIn(".quick-edit-command", self.css)
+        self.assertIn(".unbind-confirmation", self.css)
+        self.assertIn(".row-actions", self.css)
+        self.assertIn("overflow-x: scroll", self.css)
 
 
 if __name__ == "__main__":

@@ -137,6 +137,7 @@ def _install_fake_astrbot() -> None:
 _install_fake_astrbot()
 
 main = importlib.import_module("astrbot_plugin_relationship.main")
+models = importlib.import_module("astrbot_plugin_relationship.core.models")
 
 
 class FakeEvent:
@@ -240,6 +241,7 @@ class MainEntryTest(unittest.TestCase):
         self.assertIn(f"/{main.PLUGIN_NAME}/identities", routes)
         self.assertIn(f"/{main.PLUGIN_NAME}/identity-merge", routes)
         self.assertIn(f"/{main.PLUGIN_NAME}/identity-delete", routes)
+        self.assertIn(f"/{main.PLUGIN_NAME}/relationship-delete", routes)
 
     def test_relationship_snapshot_contract_is_versioned_and_privacy_limited(self):
         contract = self.plugin.relationship_snapshot_contract()
@@ -317,6 +319,55 @@ class MainEntryTest(unittest.TestCase):
             denied = _run(self.plugin.resolve_delivery_identity("summer", invalid_umo))
             self.assertFalse(denied["verified"])
             self.assertEqual(denied["reason"], "private_session_required")
+
+    def test_delivery_identity_cannot_be_unbound_during_verification(self) -> None:
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "bot-1",
+                        "session_id": "qq-main:FriendMessage:user-1",
+                    }
+                ],
+            }
+        )
+        original_snapshot = self.plugin.get_relationship_snapshot
+
+        async def scenario():
+            snapshot_started = asyncio.Event()
+            release_snapshot = asyncio.Event()
+
+            async def delayed_snapshot(*args, **kwargs):
+                snapshot_started.set()
+                await release_snapshot.wait()
+                return await original_snapshot(*args, **kwargs)
+
+            async def delete_request_json():
+                return {"person_id": "summer"}
+
+            self.plugin.get_relationship_snapshot = delayed_snapshot
+            self.plugin._request_json = delete_request_json
+            delivery_task = asyncio.create_task(
+                self.plugin.resolve_delivery_identity(
+                    "summer", "qq-main:FriendMessage:user-1"
+                )
+            )
+            await snapshot_started.wait()
+            delete_task = asyncio.create_task(self.plugin._page_delete_identity())
+            await asyncio.sleep(0)
+            self.assertFalse(delete_task.done())
+            release_snapshot.set()
+            return await delivery_task, await delete_task
+
+        delivery, deletion = _run(scenario())
+
+        self.assertTrue(delivery["verified"])
+        self.assertTrue(deletion["success"])
+        self.assertIsNone(self.plugin.identity_registry.get("summer"))
 
     def test_relationship_event_contract_records_trusted_semantics(self) -> None:
         contract = self.plugin.relationship_event_contract()
@@ -723,10 +774,10 @@ class MainEntryTest(unittest.TestCase):
         unregistered = [
             item for item in payload["users"] if item["user_id"] == "user-2"
         ]
-        orphaned = [
+        restored = [
             item
             for item in payload["users"]
-            if item["orphaned_person_id"] == "departed"
+            if item["scope_kind"] == "account" and item["user_id"] == "user-3"
         ]
 
         self.assertEqual(payload["summary"]["user_count"], 5)
@@ -743,10 +794,10 @@ class MainEntryTest(unittest.TestCase):
         self.assertTrue(
             all(len(item["relationship_profile_ids"]) == 1 for item in unregistered)
         )
-        self.assertEqual(len(orphaned), 2)
-        self.assertTrue(all(not item["person_id"] for item in orphaned))
+        self.assertEqual(len(restored), 2)
+        self.assertTrue(all(not item["person_id"] for item in restored))
         self.assertTrue(
-            all(len(item["relationship_profile_ids"]) == 1 for item in orphaned)
+            all(len(item["relationship_profile_ids"]) == 1 for item in restored)
         )
 
     def test_group_observation_does_not_prefill_group_umo(self) -> None:
@@ -775,6 +826,20 @@ class MainEntryTest(unittest.TestCase):
 
         self.plugin._request_json = fake_request_json
         return _run(self.plugin._page_merge_identity())
+
+    def _delete_identity(self, body: dict) -> dict:
+        async def fake_request_json():
+            return body
+
+        self.plugin._request_json = fake_request_json
+        return _run(self.plugin._page_delete_identity())
+
+    def _delete_relationship(self, body: dict) -> dict:
+        async def fake_request_json():
+            return body
+
+        self.plugin._request_json = fake_request_json
+        return _run(self.plugin._page_delete_relationship())
 
     def test_identity_rejects_invalid_profile_before_persisting(self) -> None:
         payload = self._save_identity(
@@ -1111,6 +1176,50 @@ class MainEntryTest(unittest.TestCase):
         self.assertEqual(recovered.manager._states[target_key].interaction_count, 2)
         self.assertNotIn(source_key, recovered.manager._states)
 
+    def test_pending_identity_unbind_is_recovered_after_restart(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        self._save_config({"AFFINITY_WHITELIST_USER_IDS": "summer"})
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="bound-1"), object()))
+        person = self.plugin.identity_registry.get("summer")
+        account = person.accounts[0]
+        source_key = "persona:default:person:summer"
+        target_key = account.state_key_for("default")
+        self.plugin._write_identity_merge_intent(
+            {
+                "mode": "unbind",
+                "source_person_id": "summer",
+                "source_person": person.as_dict(),
+                "target_account": account.as_dict(),
+                "bindings": [{"target": target_key, "sources": [source_key]}],
+                "whitelist_value": "summer,user-1",
+                "whitelist_aliases": ["user-1"],
+            }
+        )
+        self.assertTrue(self.plugin.identity_registry.delete("summer"))
+
+        recovered = main.RelationshipPlugin(
+            self.context, {"SAVE_INTERVAL_SECONDS": 0}
+        )
+        self.plugin = recovered
+
+        self.assertFalse(
+            (Path(self._tmp.name) / main._IDENTITY_MERGE_JOURNAL_NAME).exists()
+        )
+        self.assertIn(target_key, recovered.manager._states)
+        self.assertNotIn(source_key, recovered.manager._states)
+        self.assertEqual(
+            recovered._affinity_config.whitelist_user_ids,
+            ("summer", "user-1"),
+        )
+
     def test_conflicting_account_intent_is_not_recovered(self) -> None:
         self._save_identity(
             {
@@ -1402,7 +1511,44 @@ class MainEntryTest(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(req.extra_user_content_parts, [])
 
-    def test_page_delete_identity_keeps_relationship_state(self) -> None:
+    def test_cross_platform_memory_is_not_injected_after_identity_changes(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"},
+                    {
+                        "platform_id": "telegram-main",
+                        "user_id": "tg-user",
+                        "bot_id": "tg-bot",
+                    },
+                ],
+            }
+        )
+
+        plugin = self.plugin
+
+        class Bridge:
+            @staticmethod
+            async def compose_injection(*_args, **_kwargs):
+                plugin.identity_registry.delete("summer")
+                return "不应注入的旧身份记忆"
+
+        self.plugin._memory_companion_bridge = lambda: Bridge()
+        req = types.SimpleNamespace(extra_user_content_parts=[], system_prompt="")
+        event = FakeEvent(text="继续聊")
+
+        _run(self.plugin.on_cross_platform_memory(event, req))
+
+        self.assertEqual(req.extra_user_content_parts, [])
+        context = main.ensure_context(event)
+        self.assertIn(
+            "CROSS_PLATFORM_MEMORY_IDENTITY_CHANGED",
+            context["diagnostics"]["relationship"]["reasons"],
+        )
+
+    def test_page_delete_identity_restores_relationship_to_only_account(self) -> None:
         self._save_identity(
             {
                 "person_id": "summer",
@@ -1416,6 +1562,9 @@ class MainEntryTest(unittest.TestCase):
                 ],
             }
         )
+        self._save_config(
+            {"AFFINITY_WHITELIST_USER_IDS": "summer,default/summer"}
+        )
         _run(self.plugin.on_llm_request(FakeEvent(), object()))
 
         async def fake_request_json():
@@ -1425,16 +1574,312 @@ class MainEntryTest(unittest.TestCase):
         payload = _run(self.plugin._page_delete_identity())
         self.assertTrue(payload["success"])
         self.assertEqual(payload.status_code, 200)
+        self.assertTrue(payload["state_migrated"])
+        self.assertTrue(payload["whitelist_membership_preserved"])
+        self.assertEqual(
+            payload["whitelist_aliases_added"],
+            ["user-1", "default/user-1"],
+        )
+        self.assertEqual(
+            self.plugin._affinity_config.whitelist_user_ids,
+            ("summer", "default/summer", "user-1", "default/user-1"),
+        )
         self.assertIsNone(self.plugin.identity_registry.get("summer"))
-        self.assertIn("persona:default:person:summer", self.plugin.manager._states)
+        self.assertNotIn("persona:default:person:summer", self.plugin.manager._states)
+        self.assertIn(
+            "persona:default:account:bot-1:user:user-1",
+            self.plugin.manager._states,
+        )
         overview = _run(self.plugin._page_overview())
-        self.assertEqual(overview["users"][0]["orphaned_person_id"], "summer")
+        self.assertEqual(overview["users"][0]["scope_kind"], "account")
+        self.assertEqual(overview["users"][0]["user_id"], "user-1")
+        self.assertEqual(overview["users"][0]["orphaned_person_id"], "")
+        self.assertTrue(overview["users"][0]["whitelisted"])
         not_found = _run(self.plugin._page_delete_identity())
         self.assertFalse(not_found["success"])
         self.assertEqual(not_found["error"], "NOT_FOUND")
         self.assertEqual(not_found.status_code, 404)
 
-    def test_orphaned_relationship_can_merge_into_existing_identity(self) -> None:
+    def test_page_delete_identity_requires_target_for_multiple_accounts(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"},
+                    {
+                        "platform_id": "telegram-main",
+                        "user_id": "tg-user",
+                        "bot_id": "tg-bot",
+                    },
+                ],
+            }
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(), object()))
+
+        missing = self._delete_identity({"person_id": "summer"})
+
+        self.assertFalse(missing["success"])
+        self.assertEqual(missing["error"], "RESTORE_ACCOUNT_REQUIRED")
+        self.assertIsNotNone(self.plugin.identity_registry.get("summer"))
+        self.assertIn("persona:default:person:summer", self.plugin.manager._states)
+
+        restored = self._delete_identity(
+            {
+                "person_id": "summer",
+                "restore_account": {
+                    "platform_id": "telegram-main",
+                    "user_id": "tg-user",
+                },
+            }
+        )
+
+        self.assertTrue(restored["success"])
+        self.assertIn(
+            "persona:default:account:tg-bot:user:tg-user",
+            self.plugin.manager._states,
+        )
+        self.assertNotIn(
+            "persona:default:account:bot-1:user:user-1",
+            self.plugin.manager._states,
+        )
+        self.assertNotIn("persona:default:person:summer", self.plugin.manager._states)
+
+    def test_page_delete_identity_preflights_conflicting_account_state(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="bound-1"), object()))
+        source_key = "persona:default:person:summer"
+        target_key = "persona:default:account:bot-1:user:user-1"
+        state_type = type(self.plugin.manager._states[source_key])
+        self.plugin.manager._states[target_key] = state_type(interaction_count=9)
+
+        payload = self._delete_identity({"person_id": "summer"})
+
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error"], "RESTORE_ACCOUNT_STATE_CONFLICT")
+        self.assertIsNotNone(self.plugin.identity_registry.get("summer"))
+        self.assertIn(source_key, self.plugin.manager._states)
+        self.assertEqual(self.plugin.manager._states[target_key].interaction_count, 9)
+        self.assertFalse(
+            (Path(self._tmp.name) / main._IDENTITY_MERGE_JOURNAL_NAME).exists()
+        )
+
+    def test_pending_unbind_conflict_restores_person_and_clears_journal(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="bound-1"), object()))
+        person = self.plugin.identity_registry.get("summer")
+        account = person.accounts[0]
+        source_key = "persona:default:person:summer"
+        target_key = account.state_key_for("default")
+        state_type = type(self.plugin.manager._states[source_key])
+        self.plugin.manager._states[target_key] = state_type(interaction_count=9)
+        self.plugin.manager._dirty = True
+        self.plugin.manager._save(raise_errors=True)
+        self.plugin._write_identity_merge_intent(
+            {
+                "mode": "unbind",
+                "source_person_id": "summer",
+                "source_person": person.as_dict(),
+                "target_account": account.as_dict(),
+                "bindings": [{"target": target_key, "sources": [source_key]}],
+            }
+        )
+        self.assertTrue(self.plugin.identity_registry.delete("summer"))
+
+        recovered = main.RelationshipPlugin(
+            self.context, {"SAVE_INTERVAL_SECONDS": 0}
+        )
+        self.plugin = recovered
+
+        self.assertIsNotNone(recovered.identity_registry.get("summer"))
+        self.assertIn(source_key, recovered.manager._states)
+        self.assertEqual(recovered.manager._states[target_key].interaction_count, 9)
+        self.assertFalse(
+            (Path(self._tmp.name) / main._IDENTITY_MERGE_JOURNAL_NAME).exists()
+        )
+
+    def test_unresolved_identity_journal_blocks_new_writes_without_overwrite(self) -> None:
+        journal_path = Path(self._tmp.name) / main._IDENTITY_MERGE_JOURNAL_NAME
+        original = '{"schema_version": 1, "mode": "unbind", "bindings": "bad"}'
+        journal_path.write_text(original, encoding="utf-8")
+
+        save_result = self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        delete_result = self._delete_relationship(
+            {
+                "scope_kind": "account",
+                "bot_id": "bot-1",
+                "user_id": "user-1",
+                "relationship_profile_ids": ["default"],
+            }
+        )
+
+        for result in (save_result, delete_result):
+            self.assertFalse(result["success"])
+            self.assertEqual(result["error"], "IDENTITY_TRANSACTION_PENDING")
+        with self.assertRaisesRegex(ValueError, "IDENTITY_TRANSACTION_PENDING"):
+            _run(
+                self.plugin.submit_relationship_event(
+                    {
+                        "version": "1.0",
+                        "bot_id": "bot-1",
+                        "user_id": "user-1",
+                        "event_id": "pending-1",
+                        "kind": "praise",
+                        "source": "direct",
+                    }
+                )
+            )
+        self.assertEqual(journal_path.read_text(encoding="utf-8"), original)
+
+    def test_page_delete_identity_rolls_back_when_relationship_save_fails(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        _run(self.plugin.on_llm_request(FakeEvent(), object()))
+
+        class FailingRepository:
+            @staticmethod
+            def save(_states, _events) -> None:
+                raise OSError("disk unavailable")
+
+        self.plugin.manager._repo = FailingRepository()
+        payload = self._delete_identity({"person_id": "summer"})
+
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error"], "RELATIONSHIP_PERSIST_FAILED")
+        self.assertIsNotNone(self.plugin.identity_registry.get("summer"))
+        self.assertIn("persona:default:person:summer", self.plugin.manager._states)
+        self.assertNotIn(
+            "persona:default:account:bot-1:user:user-1",
+            self.plugin.manager._states,
+        )
+        self.assertFalse(
+            (Path(self._tmp.name) / main._IDENTITY_MERGE_JOURNAL_NAME).exists()
+        )
+
+    def test_page_delete_identity_rolls_back_when_whitelist_save_fails(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        self._save_config({"AFFINITY_WHITELIST_USER_IDS": "summer"})
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="bound-1"), object()))
+
+        def fail_whitelist(_value: str) -> None:
+            raise OSError("config disk unavailable")
+
+        self.plugin._persist_whitelist_preservation = fail_whitelist
+        payload = self._delete_identity({"person_id": "summer"})
+
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error"], "WHITELIST_PRESERVE_FAILED")
+        self.assertIsNotNone(self.plugin.identity_registry.get("summer"))
+        self.assertIn("persona:default:person:summer", self.plugin.manager._states)
+        self.assertNotIn(
+            "persona:default:account:bot-1:user:user-1",
+            self.plugin.manager._states,
+        )
+        self.assertEqual(self.plugin._affinity_config.whitelist_user_ids, ("summer",))
+        self.assertFalse(
+            (Path(self._tmp.name) / main._IDENTITY_MERGE_JOURNAL_NAME).exists()
+        )
+
+    def test_page_delete_relationship_keeps_whitelist_and_identity(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        self._save_config({"AFFINITY_WHITELIST_USER_IDS": "summer"})
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="before-delete"), object()))
+        whitelist_before = self.plugin._get("AFFINITY_WHITELIST_USER_IDS", "")
+
+        payload = self._delete_relationship(
+            {
+                "scope_kind": "person",
+                "person_id": "summer",
+                "relationship_profile_ids": ["default"],
+            }
+        )
+
+        self.assertTrue(payload["success"])
+        self.assertFalse(payload["whitelist_changed"])
+        self.assertEqual(
+            self.plugin._get("AFFINITY_WHITELIST_USER_IDS", ""), whitelist_before
+        )
+        self.assertEqual(self.plugin._affinity_config.whitelist_user_ids, ("summer",))
+        self.assertIsNotNone(self.plugin.identity_registry.get("summer"))
+        self.assertNotIn("persona:default:person:summer", self.plugin.manager._states)
+        self.assertEqual(_run(self.plugin._page_overview())["users"], [])
+
+        _run(self.plugin.on_llm_request(FakeEvent(message_id="after-delete"), object()))
+        overview = _run(self.plugin._page_overview())
+        self.assertTrue(overview["users"][0]["whitelisted"])
+
+    def test_page_delete_relationship_rejects_multiple_profiles_per_request(self) -> None:
+        key_a = "persona:persona-a:account:bot-1:user:user-1"
+        key_b = "persona:persona-b:account:bot-1:user:user-1"
+        self.plugin.manager._states[key_a] = models.UserRelationState(
+            interaction_count=2
+        )
+        self.plugin.manager._states[key_b] = models.UserRelationState(
+            interaction_count=3
+        )
+
+        payload = self._delete_relationship(
+            {
+                "scope_kind": "account",
+                "bot_id": "bot-1",
+                "user_id": "user-1",
+                "relationship_profile_ids": ["persona-a", "persona-b"],
+            }
+        )
+
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error"], "ONE_RELATIONSHIP_PROFILE_REQUIRED")
+        self.assertIn(key_a, self.plugin.manager._states)
+        self.assertIn(key_b, self.plugin.manager._states)
+
+    def test_legacy_orphaned_relationship_can_merge_into_existing_identity(self) -> None:
         self._save_identity(
             {
                 "person_id": "summer",
@@ -1470,11 +1915,8 @@ class MainEntryTest(unittest.TestCase):
             )
         )
 
-        async def delete_request_json():
-            return {"person_id": "old-work"}
-
-        self.plugin._request_json = delete_request_json
-        self.assertTrue(_run(self.plugin._page_delete_identity())["success"])
+        # Simulate an orphan left by versions that deleted only the registry entry.
+        self.assertTrue(self.plugin.identity_registry.delete("old-work"))
         payload = self._merge_identity(
             {"target_person_id": "summer", "source_person_id": "old-work"}
         )

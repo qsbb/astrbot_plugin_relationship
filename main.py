@@ -72,6 +72,7 @@ from .core.models import (
 from .core.mood import MoodTracker
 from .core.prompts import INJECT_MARKER, build_injection_block
 from .core.profiles import (
+    account_state_key,
     parse_state_key,
     person_state_key,
     resolve_profile_id,
@@ -90,7 +91,7 @@ from .core.request_context import (
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.6.4"
+__version__ = "0.6.5"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -138,6 +139,7 @@ class RelationshipPlugin(Star):
         self.identity_registry = IdentityRegistry(data_dir / "identity_registry.json")
         self._identity_merge_journal_path = data_dir / _IDENTITY_MERGE_JOURNAL_NAME
         self._identity_write_lock = asyncio.Lock()
+        self._config_write_lock = asyncio.Lock()
         self.account_observations = AccountObservationStore(
             data_dir / "account_observations.json"
         )
@@ -197,6 +199,7 @@ class RelationshipPlugin(Star):
             is not None,
             "account_observations_ready": getattr(self, "account_observations", None)
             is not None,
+            "identity_transaction_clear": not self._identity_transaction_pending(),
         }
         reasons = [name.upper() for name, passed in checks.items() if not passed]
         return {
@@ -264,44 +267,51 @@ class RelationshipPlugin(Star):
                 "verified": False,
                 "reason": "private_session_required",
             }
-        if self.identity_registry.get(person_id) is None:
-            return {
-                "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
-                "verified": False,
-                "reason": "person_not_found",
-            }
-        try:
-            resolved = self.identity_registry.resolve_bound_session(
-                person_id=person_id,
-                session_id=recipient_umo,
+        async with self._identity_write_lock:
+            if self._identity_transaction_pending():
+                return {
+                    "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+                    "verified": False,
+                    "reason": "identity_transaction_pending",
+                }
+            if self.identity_registry.get(person_id) is None:
+                return {
+                    "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+                    "verified": False,
+                    "reason": "person_not_found",
+                }
+            try:
+                resolved = self.identity_registry.resolve_bound_session(
+                    person_id=person_id,
+                    session_id=recipient_umo,
+                )
+            except ValueError:
+                return {
+                    "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+                    "verified": False,
+                    "reason": "bound_session_ambiguous",
+                }
+            if resolved is None:
+                return {
+                    "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+                    "verified": False,
+                    "reason": "bound_session_not_found",
+                }
+            person = resolved.person
+            account = resolved.account
+            if not account.bot_id or not account.user_id:
+                return {
+                    "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
+                    "verified": False,
+                    "reason": "bound_account_incomplete",
+                }
+            profile_id = self._account_memory_profile(account)
+            snapshot = await self.get_relationship_snapshot(
+                account.bot_id,
+                account.user_id,
+                relationship_profile_id=profile_id,
+                person_id=person.person_id,
             )
-        except ValueError:
-            return {
-                "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
-                "verified": False,
-                "reason": "bound_session_ambiguous",
-            }
-        if resolved is None:
-            return {
-                "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
-                "verified": False,
-                "reason": "bound_session_not_found",
-            }
-        person = resolved.person
-        account = resolved.account
-        if not account.bot_id or not account.user_id:
-            return {
-                "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
-                "verified": False,
-                "reason": "bound_account_incomplete",
-            }
-        profile_id = self._account_memory_profile(account)
-        snapshot = await self.get_relationship_snapshot(
-            account.bot_id,
-            account.user_id,
-            relationship_profile_id=profile_id,
-            person_id=person.person_id,
-        )
         return {
             "version": DELIVERY_IDENTITY_CONTRACT_VERSION,
             "verified": True,
@@ -336,6 +346,14 @@ class RelationshipPlugin(Star):
         self, payload: Mapping[str, Any]
     ) -> dict[str, object]:
         """Validate and record one `relationship.event@1.0` semantic fact."""
+        async with self._identity_write_lock:
+            return await self._submit_relationship_event_locked(payload)
+
+    async def _submit_relationship_event_locked(
+        self, payload: Mapping[str, Any]
+    ) -> dict[str, object]:
+        if self._identity_transaction_pending():
+            raise ValueError("IDENTITY_TRANSACTION_PENDING")
         if not isinstance(payload, Mapping):
             raise ValueError("INVALID_RELATIONSHIP_EVENT")
         if str(payload.get("version") or RELATIONSHIP_EVENT_CONTRACT_VERSION) != (
@@ -483,6 +501,36 @@ class RelationshipPlugin(Star):
             return "familiar"
         return "neutral"
 
+    async def _record_platform_interaction(
+        self, event: AstrMessageEvent, req: Any, text: str
+    ) -> tuple[RelationshipScope, Any, ResolvedIdentity | None, str] | None:
+        """Resolve identity and record under the same lock as page mutations."""
+        profile_id = await self._resolve_relationship_profile(event, req)
+        async with self._identity_write_lock:
+            if self._identity_transaction_pending():
+                return None
+            scope = self._get_scope(event, profile_id)
+            if not scope.bot_id or not scope.user_id:
+                return None
+            self._record_account_observation(event, scope, profile_id)
+            kind = "command" if text.lstrip().startswith("/") else "message"
+            interaction = InteractionEvent(
+                bot_id=scope.bot_id,
+                user_id=scope.user_id,
+                group_id=scope.group_id,
+                text=text,
+                timestamp=time.time(),
+                kind=kind,
+                event_id=self._safe_event_id(event, "get_message_id"),
+                source="platform_message",
+                person_id=scope.person_id,
+                state_alias_keys=scope.state_alias_keys,
+                relationship_profile_id=scope.relationship_profile_id,
+            )
+            snapshot = await self.manager.record(interaction)
+            resolved_identity = self._resolve_identity(event)
+            return scope, snapshot, resolved_identity, kind
+
     # ------------------------------------------------------------------
     # LLM 请求：记录事件、注入表达约束
     # ------------------------------------------------------------------
@@ -504,28 +552,10 @@ class RelationshipPlugin(Star):
         request_context = ensure_context(event, PHASE_LLM_REQUEST)
 
         text = plugin._get_text(event)
-        profile_id = await plugin._resolve_relationship_profile(event, req)
-        scope = plugin._get_scope(event, profile_id)
-        if not scope.bot_id or not scope.user_id:
+        recorded = await plugin._record_platform_interaction(event, req, text)
+        if recorded is None:
             return
-        plugin._record_account_observation(event, scope, profile_id)
-        kind = "command" if text.lstrip().startswith("/") else "message"
-        interaction = InteractionEvent(
-            bot_id=scope.bot_id,
-            user_id=scope.user_id,
-            group_id=scope.group_id,
-            text=text,
-            timestamp=time.time(),
-            kind=kind,
-            event_id=plugin._safe_event_id(event, "get_message_id"),
-            source="platform_message",
-            person_id=scope.person_id,
-            state_alias_keys=scope.state_alias_keys,
-            relationship_profile_id=scope.relationship_profile_id,
-        )
-
-        # 即使关闭短期情绪，也继续记录长期关系；Manager 内部会跳过 mood 累积。
-        snapshot = await plugin.manager.record(interaction)
+        scope, snapshot, resolved_identity, kind = recorded
         set_artifact(
             request_context,
             OWNER_RELATIONSHIP,
@@ -544,7 +574,6 @@ class RelationshipPlugin(Star):
             "RELATIONSHIP_SNAPSHOT_READY",
         )
 
-        resolved_identity = plugin._resolve_identity(event)
         if resolved_identity is not None:
             set_artifact(
                 request_context,
@@ -601,18 +630,22 @@ class RelationshipPlugin(Star):
         query = plugin._get_text(event)
         if not query or query.startswith("/"):
             return
-        resolved = plugin._resolve_identity(event)
-        if resolved is None or len(resolved.person.accounts) < 2:
-            return
         profile_id = await plugin._resolve_relationship_profile(event, req)
-        if plugin._account_memory_profile(resolved.account) != profile_id:
-            request_context = ensure_context(event, PHASE_LLM_REQUEST)
-            add_reason(
-                request_context,
-                OWNER_RELATIONSHIP,
-                "CROSS_PLATFORM_MEMORY_PROFILE_MISMATCH",
-            )
-            return
+        async with plugin._identity_write_lock:
+            if plugin._identity_transaction_pending():
+                return
+            resolved = plugin._resolve_identity(event)
+            if resolved is None or len(resolved.person.accounts) < 2:
+                return
+            if plugin._account_memory_profile(resolved.account) != profile_id:
+                request_context = ensure_context(event, PHASE_LLM_REQUEST)
+                add_reason(
+                    request_context,
+                    OWNER_RELATIONSHIP,
+                    "CROSS_PLATFORM_MEMORY_PROFILE_MISMATCH",
+                )
+                return
+            identity_snapshot = resolved
 
         request_context = ensure_context(event, PHASE_LLM_REQUEST)
         bridge = plugin._memory_companion_bridge()
@@ -671,6 +704,21 @@ class RelationshipPlugin(Star):
                 "CROSS_PLATFORM_MEMORY_NO_MATCH",
             )
             return
+
+        async with plugin._identity_write_lock:
+            current = plugin._resolve_identity(event)
+            if (
+                plugin._identity_transaction_pending()
+                or current is None
+                or current.person != identity_snapshot.person
+                or current.account != identity_snapshot.account
+            ):
+                add_reason(
+                    request_context,
+                    OWNER_RELATIONSHIP,
+                    "CROSS_PLATFORM_MEMORY_IDENTITY_CHANGED",
+                )
+                return
 
         block = (
             "[同一自然人的跨平台连续记忆]\n"
@@ -816,7 +864,13 @@ class RelationshipPlugin(Star):
                 "identity-delete",
                 self._page_delete_identity,
                 ["POST"],
-                "删除自然人账号绑定",
+                "解除自然人账号归属",
+            ),
+            (
+                "relationship-delete",
+                self._page_delete_relationship,
+                ["POST"],
+                "删除长期关系记录",
             ),
         )
         try:
@@ -904,6 +958,10 @@ class RelationshipPlugin(Star):
         return visible
 
     async def _page_overview(self):
+        async with self._identity_write_lock:
+            return self._page_overview_unlocked()
+
+    def _page_overview_unlocked(self):
         states = getattr(self.manager, "_states", {})
         users = []
         whitelist = set(self._affinity_config.whitelist_user_ids)
@@ -1136,11 +1194,13 @@ class RelationshipPlugin(Star):
         return tuple(sorted(profile_ids))
 
     async def _page_identities(self):
+        async with self._identity_write_lock:
+            persons = self.identity_registry.list_persons()
+            profile_ids = self._known_relationship_profiles()
         bridge = self._memory_companion_bridge()
-        profile_ids = self._known_relationship_profiles()
         payload = {
             "success": True,
-            "persons": self.identity_registry.list_persons(),
+            "persons": persons,
             "memory_companion": {
                 "available": callable(getattr(bridge, "compose_injection", None)),
                 "mode": "read_only_bridge",
@@ -1162,14 +1222,24 @@ class RelationshipPlugin(Star):
                 return blocked
             return await self._save_identity_payload(data)
 
+    def _identity_transaction_pending(self) -> bool:
+        return self._identity_merge_journal_path.exists()
+
     def _identity_mutation_blocked_response(self):
-        if not self.manager.persistence_write_blocked:
+        if self.manager.persistence_write_blocked:
+            payload = {
+                "success": False,
+                "error": "RELATIONSHIP_STORAGE_READ_ONLY",
+                "detail": "relationship data uses an unsupported schema; identity changes are disabled",
+            }
+        elif self._identity_transaction_pending():
+            payload = {
+                "success": False,
+                "error": "IDENTITY_TRANSACTION_PENDING",
+                "detail": "a previous identity change still requires recovery",
+            }
+        else:
             return None
-        payload = {
-            "success": False,
-            "error": "RELATIONSHIP_STORAGE_READ_ONLY",
-            "detail": "relationship data uses an unsupported schema; identity changes are disabled",
-        }
         return json_response(payload, status_code=409) if json_response else payload
 
     async def _save_identity_payload(self, data: dict[str, Any]):
@@ -1266,8 +1336,61 @@ class RelationshipPlugin(Star):
         }
         return json_response(payload) if json_response else payload
 
+    def _identity_unbind_whitelist_plan(
+        self, person: Any
+    ) -> tuple[str, tuple[str, ...]]:
+        """Keep whitelist membership effective after a person key is removed."""
+        entries = tuple(dict.fromkeys(self._affinity_config.whitelist_user_ids))
+        additions: list[str] = []
+        for entry in entries:
+            if entry == person.person_id:
+                for account in person.accounts:
+                    if "," in account.user_id:
+                        raise ValueError("WHITELIST_ALIAS_UNREPRESENTABLE")
+                    additions.append(account.user_id)
+                continue
+            profile_id, separator, identity = entry.partition("/")
+            if not separator or identity != person.person_id:
+                continue
+            try:
+                profile_id = validate_profile_id(profile_id)
+            except ValueError:
+                continue
+            for account in person.accounts:
+                if "," in account.user_id:
+                    raise ValueError("WHITELIST_ALIAS_UNREPRESENTABLE")
+                additions.append(f"{profile_id}/{account.user_id}")
+        additions = [item for item in dict.fromkeys(additions) if item not in entries]
+        if not additions:
+            return "", ()
+        return ",".join((*entries, *additions)), tuple(additions)
+
+    def _persist_whitelist_preservation(self, value: str) -> None:
+        """Persist an internally generated whitelist alias expansion via the overlay."""
+        key = "AFFINITY_WHITELIST_USER_IDS"
+        previous_overrides = dict(self._config_overrides)
+        previous_baseline = dict(self._config_baseline)
+        updated_overrides = {**previous_overrides, key: value}
+        self._record_baseline({key: value}, native_ok=False)
+        try:
+            self._config_store_write(updated_overrides)
+        except OSError:
+            self._config_baseline = previous_baseline
+            raise
+        self._config_overrides = updated_overrides
+        try:
+            self._apply_runtime_config()
+        except Exception:
+            self._config_overrides = previous_overrides
+            self._config_baseline = previous_baseline
+            self._config_store_write(previous_overrides)
+            self._apply_runtime_config()
+            raise
+
     def _write_identity_merge_intent(self, payload: dict[str, Any]) -> None:
         path = self._identity_merge_journal_path
+        if path.exists():
+            raise OSError("identity transaction journal already exists")
         path.parent.mkdir(parents=True, exist_ok=True)
         document = {"schema_version": 1, **payload}
         fd, tmp_name = tempfile.mkstemp(
@@ -1297,30 +1420,53 @@ class RelationshipPlugin(Star):
     @staticmethod
     def _parse_identity_merge_bindings(
         payload: dict[str, Any],
-    ) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    ) -> tuple[tuple[str, tuple[str, ...]], ...] | None:
         raw_bindings = payload.get("bindings")
         if not isinstance(raw_bindings, list):
-            return ()
+            return None
         bindings: list[tuple[str, tuple[str, ...]]] = []
         for item in raw_bindings:
             if not isinstance(item, dict):
-                return ()
+                return None
             target = str(item.get("target") or "").strip()
             raw_sources = item.get("sources")
             if not target or not isinstance(raw_sources, list):
-                return ()
+                return None
             sources = tuple(
                 str(value or "").strip() for value in raw_sources if str(value or "").strip()
             )
+            if not sources:
+                return None
             bindings.append((target, sources))
         return tuple(bindings)
 
     def _identity_merge_registry_reflected(self, payload: dict[str, Any]) -> bool:
+        mode = str(payload.get("mode") or "").strip()
+        if mode == "unbind":
+            source_id = str(payload.get("source_person_id") or "").strip()
+            raw_account = payload.get("target_account")
+            if not source_id or not isinstance(raw_account, dict):
+                return False
+            account = PlatformAccount.from_dict(raw_account)
+            if not account.platform_id or not account.user_id:
+                return False
+            rebound = any(
+                item.platform_id.casefold() == account.platform_id.casefold()
+                and item.user_id == account.user_id
+                for person_data in self.identity_registry.list_persons()
+                if (
+                    registered := self.identity_registry.get(
+                        str(person_data.get("person_id") or "")
+                    )
+                )
+                for item in registered.accounts
+            )
+            return self.identity_registry.get(source_id) is None and not rebound
+
         target_id = str(payload.get("target_person_id") or "").strip()
         target = self.identity_registry.get(target_id)
         if target is None:
             return False
-        mode = str(payload.get("mode") or "").strip()
         target_accounts = {
             (account.platform_id.casefold(), account.user_id)
             for account in target.accounts
@@ -1383,24 +1529,72 @@ class RelationshipPlugin(Star):
                 "[relationship] identity merge journal unreadable: %s", exc
             )
             return
-        bindings = (
-            self._parse_identity_merge_bindings(payload)
-            if isinstance(payload, dict) and payload.get("schema_version") == 1
-            else ()
-        )
-        if not bindings or not self._identity_merge_registry_reflected(payload):
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            self.logger.warning(
+                "[relationship] identity merge journal has an unsupported schema"
+            )
+            return
+        bindings = self._parse_identity_merge_bindings(payload)
+        if bindings is None:
+            self.logger.warning(
+                "[relationship] identity merge journal has invalid bindings"
+            )
+            return
+        mode = str(payload.get("mode") or "").strip()
+        if mode != "unbind" and not bindings:
+            self.logger.warning(
+                "[relationship] identity merge journal has no merge bindings"
+            )
+            return
+        if not self._identity_merge_registry_reflected(payload):
             self._clear_identity_merge_intent()
             return
+        recovery_stage = "relationship"
         try:
-            changed = self.manager.recover_identity_merge_states(bindings)
+            if mode == "unbind":
+                if any(len(sources) != 1 for _, sources in bindings):
+                    self.logger.warning(
+                        "[relationship] identity unbind journal has invalid sources"
+                    )
+                    return
+                changed = self.manager.recover_identity_unbind_states(
+                    tuple((target, sources[0]) for target, sources in bindings)
+                )
+                recovery_stage = "whitelist"
+                whitelist_value = str(payload.get("whitelist_value") or "")
+                if whitelist_value:
+                    self._persist_whitelist_preservation(whitelist_value)
+            else:
+                changed = self.manager.recover_identity_merge_states(bindings)
         except Exception as exc:
+            if mode == "unbind" and recovery_stage == "relationship":
+                source_person = payload.get("source_person")
+                if isinstance(source_person, dict):
+                    try:
+                        self.identity_registry.upsert(source_person)
+                    except Exception as rollback_exc:
+                        self.logger.warning(
+                            "[relationship] pending identity unbind rollback failed: %s; "
+                            "original recovery error: %s",
+                            rollback_exc,
+                            exc,
+                        )
+                        return
+                    self._clear_identity_merge_intent()
+                    self.logger.warning(
+                        "[relationship] rolled back pending identity unbind after "
+                        "relationship conflict: %s",
+                        exc,
+                    )
+                    return
             self.logger.warning(
                 "[relationship] pending identity merge recovery failed: %s", exc
             )
             return
         self._clear_identity_merge_intent()
         self.logger.info(
-            "[relationship] recovered pending identity merge: %s profile(s)",
+            "[relationship] recovered pending identity %s: %s profile(s)",
+            "unbind" if mode == "unbind" else "merge",
             len(changed),
         )
 
@@ -1591,30 +1785,267 @@ class RelationshipPlugin(Star):
 
     async def _page_delete_identity(self):
         data = await self._request_json()
-        person_id = (
-            str(data.get("person_id") or "").strip() if isinstance(data, dict) else ""
-        )
+        if not isinstance(data, dict):
+            payload = {"success": False, "error": "INVALID_JSON_PAYLOAD"}
+            return json_response(payload, status_code=400) if json_response else payload
+        person_id = str(data.get("person_id") or "").strip()
         if not person_id:
             payload = {"success": False, "error": "PERSON_ID_REQUIRED"}
             return json_response(payload, status_code=400) if json_response else payload
+        raw_target = data.get("restore_account")
+        async with self._identity_write_lock:
+            blocked = self._identity_mutation_blocked_response()
+            if blocked is not None:
+                return blocked
+            identity_before: dict[str, Any] = {}
+            identity_changed = False
+            journal_written = False
+            operation_stage = "validation"
+            bindings: tuple[tuple[str, str], ...] = ()
+            migrated_keys: tuple[str, ...] = ()
+            whitelist_value = ""
+            whitelist_aliases: tuple[str, ...] = ()
+            selected_account = None
+            config_locked = False
+            try:
+                person = self.identity_registry.get(person_id)
+                if person is None:
+                    payload = {"success": False, "error": "NOT_FOUND"}
+                    return (
+                        json_response(payload, status_code=404)
+                        if json_response
+                        else payload
+                    )
+
+                if raw_target is not None:
+                    if not isinstance(raw_target, dict):
+                        raise ValueError("INVALID_RESTORE_ACCOUNT")
+                    platform_id = str(raw_target.get("platform_id") or "").strip()
+                    user_id = str(raw_target.get("user_id") or "").strip()
+                    selected_account = next(
+                        (
+                            account
+                            for account in person.accounts
+                            if account.platform_id.casefold() == platform_id.casefold()
+                            and account.user_id == user_id
+                        ),
+                        None,
+                    )
+                    if selected_account is None:
+                        raise ValueError("RESTORE_ACCOUNT_NOT_BOUND")
+                elif len(person.accounts) == 1:
+                    selected_account = person.accounts[0]
+                else:
+                    raise ValueError("RESTORE_ACCOUNT_REQUIRED")
+
+                profile_ids = self._known_relationship_profiles()
+                source_keys = tuple(
+                    person.relationship_key_for(profile_id)
+                    for profile_id in profile_ids
+                    if person.relationship_key_for(profile_id)
+                    in getattr(self.manager, "_states", {})
+                )
+                if source_keys and not selected_account.bot_id:
+                    raise ValueError("RESTORE_ACCOUNT_BOT_ID_REQUIRED")
+                bindings = tuple(
+                    (
+                        selected_account.state_key_for(parsed["profile_id"]),
+                        source_key,
+                    )
+                    for source_key in source_keys
+                    if (parsed := parse_state_key(source_key)) is not None
+                )
+                await self._config_write_lock.acquire()
+                config_locked = True
+                whitelist_value, whitelist_aliases = self._identity_unbind_whitelist_plan(
+                    person
+                )
+
+                operation_stage = "preflight"
+                await self.manager.validate_identity_unbind_states(bindings)
+
+                identity_before = self.identity_registry.snapshot()
+                if bindings or whitelist_aliases:
+                    intent = {
+                        "mode": "unbind",
+                        "source_person_id": person_id,
+                        "source_person": person.as_dict(),
+                        "target_account": selected_account.as_dict(),
+                        "bindings": [
+                            {"target": target, "sources": [source]}
+                            for target, source in bindings
+                        ],
+                        "whitelist_value": whitelist_value,
+                        "whitelist_aliases": list(whitelist_aliases),
+                    }
+                    operation_stage = "journal"
+                    self._write_identity_merge_intent(intent)
+                    journal_written = True
+
+                operation_stage = "identity"
+                deleted = self.identity_registry.delete(person_id)
+                identity_changed = deleted
+                if not deleted:
+                    raise ValueError("NOT_FOUND")
+
+                operation_stage = "relationship"
+                migrated_keys = await self.manager.unbind_identity_states(bindings)
+                if whitelist_value:
+                    operation_stage = "whitelist"
+                    self._persist_whitelist_preservation(whitelist_value)
+                if journal_written:
+                    self._clear_identity_merge_intent()
+                    journal_written = False
+            except Exception as exc:
+                rollback_errors: list[str] = []
+                if migrated_keys:
+                    source_by_target = dict(bindings)
+                    reverse_bindings = tuple(
+                        (source_by_target[target], (target,))
+                        for target in migrated_keys
+                        if target in source_by_target
+                    )
+                    try:
+                        await self.manager.merge_identity_states(reverse_bindings)
+                    except Exception as rollback_exc:
+                        rollback_errors.append(f"relationship: {rollback_exc}")
+                if identity_changed:
+                    try:
+                        self.identity_registry.restore(identity_before)
+                    except Exception as rollback_exc:
+                        rollback_errors.append(f"identity: {rollback_exc}")
+                if journal_written and not rollback_errors:
+                    self._clear_identity_merge_intent()
+                if config_locked:
+                    self._config_write_lock.release()
+                    config_locked = False
+                error = str(exc) or type(exc).__name__
+                if rollback_errors:
+                    payload = {
+                        "success": False,
+                        "error": "IDENTITY_ROLLBACK_FAILED",
+                        "detail": f"{error}; rollback: {'; '.join(rollback_errors)}",
+                    }
+                    return (
+                        json_response(payload, status_code=500)
+                        if json_response
+                        else payload
+                    )
+                if isinstance(exc, ValueError):
+                    status = 404 if error == "NOT_FOUND" else 400
+                    payload = {"success": False, "error": error}
+                    return (
+                        json_response(payload, status_code=status)
+                        if json_response
+                        else payload
+                    )
+                error_code = (
+                    "IDENTITY_PERSIST_FAILED"
+                    if operation_stage in {"journal", "identity"}
+                    else (
+                        "WHITELIST_PRESERVE_FAILED"
+                        if operation_stage == "whitelist"
+                        else "RELATIONSHIP_PERSIST_FAILED"
+                    )
+                )
+                payload = {
+                    "success": False,
+                    "error": error_code,
+                    "detail": error,
+                }
+                return (
+                    json_response(payload, status_code=500)
+                    if json_response
+                    else payload
+                )
+            except BaseException:
+                if config_locked:
+                    self._config_write_lock.release()
+                raise
+
+            if config_locked:
+                self._config_write_lock.release()
+            payload = {
+                "success": True,
+                "restored_account": selected_account.as_dict(),
+                "state_migrated": bool(migrated_keys),
+                "migrated_profiles": [
+                    parsed["profile_id"]
+                    for key in migrated_keys
+                    if (parsed := parse_state_key(key)) is not None
+                ],
+                "whitelist_membership_preserved": True,
+                "whitelist_aliases_added": list(whitelist_aliases),
+            }
+            return json_response(payload) if json_response else payload
+
+    async def _page_delete_relationship(self):
+        data = await self._request_json()
+        if not isinstance(data, dict):
+            payload = {"success": False, "error": "INVALID_JSON_PAYLOAD"}
+            return json_response(payload, status_code=400) if json_response else payload
+        scope_kind = str(data.get("scope_kind") or "").strip()
+        raw_profiles = data.get("relationship_profile_ids")
+        if isinstance(raw_profiles, str):
+            raw_profiles = [raw_profiles]
+        if not isinstance(raw_profiles, list) or not raw_profiles:
+            payload = {"success": False, "error": "RELATIONSHIP_PROFILE_REQUIRED"}
+            return json_response(payload, status_code=400) if json_response else payload
+        if len(raw_profiles) != 1:
+            payload = {"success": False, "error": "ONE_RELATIONSHIP_PROFILE_REQUIRED"}
+            return json_response(payload, status_code=400) if json_response else payload
         try:
+            profile_ids = tuple(
+                dict.fromkeys(
+                    validate_profile_id(str(value or "").strip())
+                    for value in raw_profiles[:100]
+                )
+            )
+            if scope_kind == "person":
+                person_id = str(data.get("person_id") or "").strip()
+                if not person_id:
+                    raise ValueError("PERSON_ID_REQUIRED")
+                state_keys = tuple(
+                    person_state_key(profile_id, person_id)
+                    for profile_id in profile_ids
+                )
+            elif scope_kind == "account":
+                bot_id = str(data.get("bot_id") or "").strip()
+                user_id = str(data.get("user_id") or "").strip()
+                if not bot_id or not user_id:
+                    raise ValueError("ACCOUNT_SCOPE_REQUIRED")
+                state_keys = tuple(
+                    account_state_key(profile_id, bot_id, user_id)
+                    for profile_id in profile_ids
+                )
+            else:
+                raise ValueError("INVALID_SCOPE_KIND")
             async with self._identity_write_lock:
                 blocked = self._identity_mutation_blocked_response()
                 if blocked is not None:
                     return blocked
-                deleted = self.identity_registry.delete(person_id)
+                deleted_keys = await self.manager.delete_relationship_states(state_keys)
         except ValueError as exc:
-            payload = {"success": False, "error": str(exc) or "INVALID_PERSON_ID"}
+            payload = {"success": False, "error": str(exc) or "INVALID_SCOPE"}
             return json_response(payload, status_code=400) if json_response else payload
-        except OSError as exc:
+        except Exception as exc:
             payload = {
                 "success": False,
-                "error": "IDENTITY_PERSIST_FAILED",
+                "error": "RELATIONSHIP_PERSIST_FAILED",
                 "detail": str(exc) or type(exc).__name__,
             }
             return json_response(payload, status_code=500) if json_response else payload
-        payload = {"success": deleted, "error": "" if deleted else "NOT_FOUND"}
-        status = 200 if deleted else 404
+        payload = {
+            "success": bool(deleted_keys),
+            "error": "" if deleted_keys else "NOT_FOUND",
+            "deleted_profiles": [
+                parsed["profile_id"]
+                for key in deleted_keys
+                if (parsed := parse_state_key(key)) is not None
+            ],
+            "whitelist_changed": False,
+        }
+        status = 200 if deleted_keys else 404
         return json_response(payload, status_code=status) if json_response else payload
 
     async def _page_save_config(self):
@@ -1622,6 +2053,20 @@ class RelationshipPlugin(Star):
         if not isinstance(data, dict):
             payload = {"success": False, "error": "INVALID_JSON_PAYLOAD"}
             return json_response(payload, status_code=400) if json_response else payload
+        async with self._config_write_lock:
+            return self._save_config_payload(data)
+
+    def _save_config_payload(self, data: dict[str, Any]):
+        if (
+            self._identity_transaction_pending()
+            and "AFFINITY_WHITELIST_USER_IDS" in data
+        ):
+            payload = {
+                "success": False,
+                "error": "IDENTITY_TRANSACTION_PENDING",
+                "detail": "whitelist preservation is waiting for identity recovery",
+            }
+            return json_response(payload, status_code=409) if json_response else payload
         schema = self._schema()
         current_config = self._public_config()
         changes: dict[str, Any] = {}
@@ -1853,11 +2298,18 @@ class RelationshipPlugin(Star):
         """重置当前会话情绪与当前用户的长期关系。"""
         plugin = RelationshipPlugin._current_instance or self
         profile_id = await plugin._resolve_relationship_profile(event)
-        scope = plugin._get_scope(event, profile_id)
-        if not scope.bot_id or not scope.user_id:
+        async with plugin._identity_write_lock:
+            transaction_pending = plugin._identity_transaction_pending()
+            scope = plugin._get_scope(event, profile_id)
+            valid_scope = bool(scope.bot_id and scope.user_id)
+            if valid_scope and not transaction_pending:
+                await plugin.manager.reset(scope)
+        if transaction_pending:
+            yield event.plain_result("上一次账号归属变更仍在恢复中，暂时不能重置关系。")
+            return
+        if not valid_scope:
             yield event.plain_result("无法识别当前用户或 bot 身份。")
             return
-        await plugin.manager.reset(scope)
         yield event.plain_result("当前会话情绪与用户关系状态已重置。")
 
     # ------------------------------------------------------------------

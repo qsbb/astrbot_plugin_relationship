@@ -281,6 +281,73 @@ class RelationshipStateManager:
                 raise
             return changed
 
+    async def unbind_identity_states(
+        self,
+        bindings: tuple[tuple[str, str], ...],
+    ) -> tuple[str, ...]:
+        """Atomically move person states back to one explicitly selected account."""
+        async with self._lock:
+            states_before = {
+                key: UserRelationState.from_dict(value.as_dict())
+                for key, value in self._states.items()
+            }
+            dirty_before = self._dirty
+            try:
+                changed = tuple(
+                    target_key
+                    for target_key, source_key in bindings
+                    if self._unbind_identity_state_unlocked(target_key, source_key)
+                )
+                if not changed:
+                    return ()
+                self._dirty = True
+                self._save(raise_errors=True)
+            except Exception:
+                self._states = states_before
+                self._dirty = dirty_before
+                raise
+            return changed
+
+    async def validate_identity_unbind_states(
+        self,
+        bindings: tuple[tuple[str, str], ...],
+    ) -> None:
+        """Reject invalid or conflicting unbinds before identity data is removed."""
+        async with self._lock:
+            for target_key, source_key in bindings:
+                self._validate_identity_unbind_state_unlocked(
+                    target_key,
+                    source_key,
+                )
+
+    async def delete_relationship_states(
+        self, state_keys: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Delete exact long-term relationship states without touching policy lists."""
+        async with self._lock:
+            states_before = {
+                key: UserRelationState.from_dict(value.as_dict())
+                for key, value in self._states.items()
+            }
+            dirty_before = self._dirty
+            try:
+                deleted = tuple(
+                    key
+                    for value in state_keys
+                    if (key := str(value or "").strip())
+                    and parse_state_key(key) is not None
+                    and self._states.pop(key, None) is not None
+                )
+                if not deleted:
+                    return ()
+                self._dirty = True
+                self._save(raise_errors=True)
+            except Exception:
+                self._states = states_before
+                self._dirty = dirty_before
+                raise
+            return deleted
+
     def recover_identity_merge_states(
         self,
         bindings: tuple[tuple[str, tuple[str, ...]], ...],
@@ -308,6 +375,73 @@ class RelationshipStateManager:
             self._dirty = dirty_before
             raise
         return changed
+
+    def recover_identity_unbind_states(
+        self,
+        bindings: tuple[tuple[str, str], ...],
+    ) -> tuple[str, ...]:
+        """Finish a durable unbind intent during single-threaded plugin startup."""
+        states_before = {
+            key: UserRelationState.from_dict(value.as_dict())
+            for key, value in self._states.items()
+        }
+        dirty_before = self._dirty
+        try:
+            changed = tuple(
+                target_key
+                for target_key, source_key in bindings
+                if self._unbind_identity_state_unlocked(target_key, source_key)
+            )
+            if not changed:
+                return ()
+            self._dirty = True
+            self._save(raise_errors=True)
+        except Exception:
+            self._states = states_before
+            self._dirty = dirty_before
+            raise
+        return changed
+
+    def _unbind_identity_state_unlocked(
+        self, target_account_key: str, source_person_key: str
+    ) -> bool:
+        source_state = self._validate_identity_unbind_state_unlocked(
+            target_account_key,
+            source_person_key,
+        )
+        if source_state is None:
+            return False
+        self._states[target_account_key] = UserRelationState.from_dict(
+            source_state.as_dict()
+        )
+        self._states.pop(source_person_key, None)
+        return True
+
+    def _validate_identity_unbind_state_unlocked(
+        self, target_account_key: str, source_person_key: str
+    ) -> UserRelationState | None:
+        target_account_key = str(target_account_key or "").strip()
+        source_person_key = str(source_person_key or "").strip()
+        target = parse_state_key(target_account_key)
+        source = parse_state_key(source_person_key)
+        if (
+            not target
+            or target.get("kind") != "account"
+            or not source
+            or source.get("kind") != "person"
+            or target.get("profile_id") != source.get("profile_id")
+        ):
+            raise ValueError("INVALID_UNBIND_STATE_BINDING")
+        source_state = self._states.get(source_person_key)
+        if source_state is None:
+            return False
+        target_state = self._states.get(target_account_key)
+        if (
+            target_state is not None
+            and target_state.as_dict() != source_state.as_dict()
+        ):
+            raise ValueError("RESTORE_ACCOUNT_STATE_CONFLICT")
+        return source_state
 
     def _merge_identity_states_unlocked(
         self, relationship_key: str, source_state_keys: tuple[str, ...]

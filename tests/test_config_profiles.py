@@ -98,9 +98,7 @@ def test_schema_matches_runtime_defaults_and_documents_migration() -> None:
     assert schema["DYNAMICS_EVIDENCE_HALF_LIFE"]["minimum"] == pytest.approx(0.1)
     assert schema["RELATIONSHIP_DEFAULT_PROFILE_ID"]["default"] == "default"
     assert schema["RELATIONSHIP_LEGACY_PROFILE_ID"]["default"] == "default"
-    assert "首次 v3 -> v4 迁移前" in schema["RELATIONSHIP_LEGACY_PROFILE_ID"][
-        "description"
-    ]
+    assert "首次" in schema["RELATIONSHIP_LEGACY_PROFILE_ID"]["hint"]
     assert "persona_id=profile_id" in schema["RELATIONSHIP_PERSONA_PROFILE_MAP"][
-        "description"
+        "hint"
     ]

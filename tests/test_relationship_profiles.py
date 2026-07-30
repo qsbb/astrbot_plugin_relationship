@@ -127,6 +127,70 @@ def test_natural_person_shares_accounts_only_inside_one_profile() -> None:
     assert not set(aliases_a + aliases_b).intersection(manager._states)
 
 
+def test_unbind_identity_moves_each_profile_to_selected_account() -> None:
+    manager = _manager()
+    source_a = "persona:persona-a:person:summer"
+    source_b = "persona:persona-b:person:summer"
+    target_a = "persona:persona-a:account:bot:user:u1"
+    target_b = "persona:persona-b:account:bot:user:u1"
+    manager._states[source_a] = UserRelationState(interaction_count=3)
+    manager._states[source_b] = UserRelationState(interaction_count=7)
+
+    changed = _run(
+        manager.unbind_identity_states(
+            ((target_a, source_a), (target_b, source_b))
+        )
+    )
+
+    assert changed == (target_a, target_b)
+    assert manager._states[target_a].interaction_count == 3
+    assert manager._states[target_b].interaction_count == 7
+    assert source_a not in manager._states
+    assert source_b not in manager._states
+
+
+def test_unbind_identity_rejects_conflicting_account_state_and_rolls_back() -> None:
+    manager = _manager()
+    source = "persona:default:person:summer"
+    target = "persona:default:account:bot:user:u1"
+    manager._states[source] = UserRelationState(interaction_count=5)
+    manager._states[target] = UserRelationState(interaction_count=2)
+
+    with pytest.raises(ValueError, match="RESTORE_ACCOUNT_STATE_CONFLICT"):
+        _run(manager.unbind_identity_states(((target, source),)))
+
+    assert manager._states[source].interaction_count == 5
+    assert manager._states[target].interaction_count == 2
+
+
+def test_unbind_identity_preflight_rejects_conflict_without_mutation() -> None:
+    manager = _manager()
+    source = "persona:default:person:summer"
+    target = "persona:default:account:bot:user:u1"
+    manager._states[source] = UserRelationState(interaction_count=5)
+    manager._states[target] = UserRelationState(interaction_count=2)
+
+    with pytest.raises(ValueError, match="RESTORE_ACCOUNT_STATE_CONFLICT"):
+        _run(manager.validate_identity_unbind_states(((target, source),)))
+
+    assert manager._states[source].interaction_count == 5
+    assert manager._states[target].interaction_count == 2
+
+
+def test_delete_relationship_states_removes_only_requested_profiles() -> None:
+    manager = _manager()
+    profile_a = "persona:persona-a:person:summer"
+    profile_b = "persona:persona-b:person:summer"
+    manager._states[profile_a] = UserRelationState(interaction_count=3)
+    manager._states[profile_b] = UserRelationState(interaction_count=7)
+
+    deleted = _run(manager.delete_relationship_states((profile_a,)))
+
+    assert deleted == (profile_a,)
+    assert profile_a not in manager._states
+    assert manager._states[profile_b].interaction_count == 7
+
+
 def test_initial_prior_is_fixed_audited_and_cannot_be_reapplied_after_reset() -> None:
     manager = _manager()
     scope = RelationshipScope(
