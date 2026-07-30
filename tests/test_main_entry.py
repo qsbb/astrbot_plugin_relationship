@@ -410,6 +410,14 @@ class MainEntryTest(unittest.TestCase):
             )
 
     def test_relationship_event_resolves_bound_person_without_platform(self) -> None:
+        self._save_config(
+            {
+                "AFFINITY_WHITELIST_USER_IDS": "user-1",
+                "AFFINITY_NON_WHITELIST_CEILING": 50,
+                "AFFINITY_WHITELIST_TRUST_GATE": 0,
+                "AFFINITY_WHITELIST_FAMILIARITY_GATE": 0,
+            }
+        )
         self.plugin.identity_registry.upsert(
             {
                 "person_id": "summer",
@@ -432,8 +440,8 @@ class MainEntryTest(unittest.TestCase):
         result = _run(
             self.plugin.submit_relationship_event(
                 {
-                    "bot_id": "bot-1",
-                    "user_id": "user-1",
+                    "bot_id": "tg-bot",
+                    "user_id": "tg-user",
                     "event_id": "bound-praise-1",
                     "kind": "praise",
                     "source": "direct",
@@ -443,8 +451,14 @@ class MainEntryTest(unittest.TestCase):
 
         self.assertTrue(result["accepted"])
         self.assertIn("persona:default:person:summer", self.plugin.manager._states)
+        self.assertGreater(
+            self.plugin.manager._states[
+                "persona:default:person:summer"
+            ].affinity_score,
+            50.0,
+        )
         self.assertNotIn(
-            "persona:default:account:bot-1:user:user-1",
+            "persona:default:account:tg-bot:user:tg-user",
             self.plugin.manager._states,
         )
 
@@ -1063,6 +1077,134 @@ class MainEntryTest(unittest.TestCase):
             "persona:default:person:work-account", self.plugin.manager._states
         )
 
+    def test_registered_identity_merge_preserves_source_person_whitelist(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        self._save_identity(
+            {
+                "person_id": "work-account",
+                "display_name": "工作账号",
+                "accounts": [
+                    {
+                        "platform_id": "discord-main",
+                        "user_id": "discord-user",
+                        "bot_id": "discord-bot",
+                    }
+                ],
+            }
+        )
+        self._save_config(
+            {
+                "AFFINITY_WHITELIST_USER_IDS": (
+                    "work-account,default/work-account"
+                )
+            }
+        )
+
+        payload = self._merge_identity(
+            {"target_person_id": "summer", "source_person_id": "work-account"}
+        )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(
+            payload["whitelist_aliases_added"],
+            ["summer", "default/summer"],
+        )
+        self.assertEqual(
+            self.plugin._affinity_config.whitelist_user_ids,
+            (
+                "summer",
+                "default/summer",
+            ),
+        )
+        recreated = self._save_identity(
+            {
+                "person_id": "work-account",
+                "display_name": "新的工作身份",
+                "accounts": [
+                    {
+                        "platform_id": "matrix-main",
+                        "user_id": "new-work-user",
+                        "bot_id": "matrix-bot",
+                    }
+                ],
+            }
+        )
+        self.assertTrue(recreated["success"])
+        identities = _run(self.plugin._page_identities())
+        recreated_person = next(
+            item
+            for item in identities["persons"]
+            if item["person_id"] == "work-account"
+        )
+        self.assertEqual(recreated_person["whitelisted_relationship_profiles"], [])
+
+    def test_pending_person_merge_recovers_whitelist_after_persist_failure(self) -> None:
+        self._save_identity(
+            {
+                "person_id": "summer",
+                "display_name": "心夏",
+                "accounts": [
+                    {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+                ],
+            }
+        )
+        self._save_identity(
+            {
+                "person_id": "work-account",
+                "display_name": "工作账号",
+                "accounts": [
+                    {
+                        "platform_id": "discord-main",
+                        "user_id": "discord-user",
+                        "bot_id": "discord-bot",
+                    }
+                ],
+            }
+        )
+        self._save_config({"AFFINITY_WHITELIST_USER_IDS": "work-account"})
+
+        def fail_whitelist(_value: str) -> None:
+            raise OSError("config unavailable")
+
+        self.plugin._persist_whitelist_preservation = fail_whitelist
+        failed = self._merge_identity(
+            {"target_person_id": "summer", "source_person_id": "work-account"}
+        )
+
+        journal = Path(self._tmp.name) / main._IDENTITY_MERGE_JOURNAL_NAME
+        self.assertFalse(failed["success"])
+        self.assertEqual(failed["error"], "WHITELIST_PRESERVE_FAILED")
+        self.assertTrue(journal.exists())
+        self.assertIsNone(self.plugin.identity_registry.get("work-account"))
+
+        config_path = Path(self._tmp.name) / main._CONFIG_STORE_NAME
+        config_document = json.loads(config_path.read_text(encoding="utf-8"))
+        config_document["AFFINITY_WHITELIST_USER_IDS"] = "work-account,new-user"
+        config_path.write_text(
+            json.dumps(config_document, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+
+        recovered = main.RelationshipPlugin(
+            self.context,
+            {"SAVE_INTERVAL_SECONDS": 0},
+        )
+        self.plugin = recovered
+
+        self.assertFalse(journal.exists())
+        self.assertEqual(
+            recovered._affinity_config.whitelist_user_ids,
+            ("summer", "new-user"),
+        )
+
     def test_identity_merge_failure_restores_registry_and_relationship_states(self) -> None:
         self._save_identity(
             {
@@ -1441,6 +1583,80 @@ class MainEntryTest(unittest.TestCase):
             item for item in identities["persons"] if item["person_id"] == "summer"
         )
         self.assertEqual(person["whitelisted_relationship_profiles"], ["default"])
+
+    def test_account_uid_whitelist_survives_binding_and_unlocks_prior(self) -> None:
+        self._save_config({"AFFINITY_WHITELIST_USER_IDS": "user-1"})
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(message_id="active-before-binding"), object()
+            )
+        )
+        body = {
+            "person_id": "summer",
+            "display_name": "心夏",
+            "relationship_profile_id": "default",
+            "accounts": [
+                {
+                    "platform_id": "qq-main",
+                    "user_id": "user-1",
+                    "bot_id": "bot-1",
+                },
+                {
+                    "platform_id": "telegram-main",
+                    "user_id": "tg-user",
+                    "bot_id": "tg-bot",
+                },
+            ],
+        }
+
+        bound = self._save_identity(body)
+        self.assertTrue(bound["success"])
+        self.assertEqual(
+            self.plugin._affinity_config.whitelist_user_ids,
+            ("user-1",),
+        )
+
+        overview = _run(self.plugin._page_overview())
+        relationship = next(
+            item for item in overview["users"] if item["person_id"] == "summer"
+        )
+        self.assertTrue(relationship["whitelisted"])
+
+        identities = _run(self.plugin._page_identities())
+        person = next(
+            item for item in identities["persons"] if item["person_id"] == "summer"
+        )
+        self.assertEqual(person["whitelisted_relationship_profiles"], ["default"])
+
+        other_platform_scope = self.plugin._get_scope(
+            FakeEvent(
+                bot_id="tg-bot",
+                sender_id="tg-user",
+                platform_id="telegram-main",
+            ),
+            "default",
+        )
+        self.assertEqual(
+            other_platform_scope.whitelist_alias_ids,
+            ("user-1", "tg-user"),
+        )
+
+        state = self.plugin.manager._states["persona:default:person:summer"]
+        interaction_count = state.interaction_count
+        last_event_at = state.last_event_at
+        first = self._save_identity({**body, "initial_prior": "fond"})
+        second = self._save_identity({**body, "initial_prior": "acquainted"})
+
+        self.assertTrue(first["initial_prior"]["applied"])
+        self.assertTrue(first["initial_prior"]["whitelist_override"])
+        self.assertEqual(first["initial_prior"]["level"], "fond")
+        self.assertFalse(second["initial_prior"]["applied"])
+        self.assertEqual(
+            second["initial_prior"]["error"], "INITIAL_PRIOR_ALREADY_APPLIED"
+        )
+        state = self.plugin.manager._states["persona:default:person:summer"]
+        self.assertEqual(state.interaction_count, interaction_count)
+        self.assertEqual(state.last_event_at, last_event_at)
 
     def test_active_non_whitelist_identity_cannot_apply_initial_prior(self) -> None:
         body = {

@@ -100,6 +100,15 @@ class PersonIdentity:
             )
         )
 
+    @property
+    def account_user_ids(self) -> tuple[str, ...]:
+        """Return verified account UIDs that may identify this natural person."""
+        return tuple(
+            dict.fromkeys(
+                account.user_id for account in self.accounts if account.user_id
+            )
+        )
+
     def alias_state_keys_for(self, profile_id: str) -> tuple[str, ...]:
         return tuple(
             dict.fromkeys(

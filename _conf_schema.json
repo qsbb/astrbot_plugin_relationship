@@ -178,7 +178,7 @@
   "AFFINITY_WHITELIST_USER_IDS": {
     "type": "string",
     "description": "高好感白名单",
-    "hint": "只有名单内且信任、熟悉度达标的关系才能进入高好感区。多项用英文逗号分隔；profile_id/person_id 只匹配指定关系人格，单独填写 person_id 会匹配其所有人格，未绑定账号可填平台 UID。解除自然人归属时会保留原项，并按需补上原账号 UID，避免白名单资格丢失。",
+    "hint": "只有名单内且信任、熟悉度达标的关系才能进入高好感区。多项用英文逗号分隔；profile_id/person_id 或 profile_id/账号UID 只匹配指定关系人格，裸自然人 ID 或已归属账号 UID 会匹配其所有人格。归属账号后原 UID 配置继续有效；解除归属时会补充账号等价项，合并自然人时会把来源项替换为目标项。",
     "default": ""
   },
   "AFFINITY_HIGH_THRESHOLD": {

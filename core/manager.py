@@ -574,9 +574,10 @@ class RelationshipStateManager:
                 ):
                     raise ValueError("INITIAL_PRIOR_ALREADY_APPLIED")
                 state = self._materialize_bound_state(scope)
+                if state is not None and state.initial_prior_applied_at > 0:
+                    raise ValueError("INITIAL_PRIOR_ALREADY_APPLIED")
                 relationship_active = state is not None and (
-                    state.initial_prior_applied_at > 0
-                    or state.interaction_count > 0
+                    state.interaction_count > 0
                     or state.last_event_at > 0
                 )
                 if relationship_active and not allow_active_relationship:
@@ -613,6 +614,7 @@ class RelationshipStateManager:
                     person_id=scope.person_id,
                     state_alias_keys=scope.state_alias_keys,
                     relationship_profile_id=scope.relationship_profile_id,
+                    whitelist_alias_ids=scope.whitelist_alias_ids,
                 )
                 event_id, dedupe_key = self._event_identity(event, now)
                 self._append_event(
@@ -778,6 +780,7 @@ class RelationshipStateManager:
             person_id=event.person_id,
             state_alias_keys=event.state_alias_keys,
             relationship_profile_id=event.relationship_profile_id,
+            whitelist_alias_ids=event.whitelist_alias_ids,
         )
 
     def _materialize_bound_state(

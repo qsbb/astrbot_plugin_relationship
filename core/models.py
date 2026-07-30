@@ -82,6 +82,7 @@ class RelationshipScope:
     person_id: str = ""
     state_alias_keys: tuple[str, ...] = ()
     relationship_profile_id: str = DEFAULT_PROFILE_ID
+    whitelist_alias_ids: tuple[str, ...] = ()
 
     @property
     def user_key(self) -> str:
@@ -133,16 +134,18 @@ class InteractionEvent:
     person_id: str = ""
     state_alias_keys: tuple[str, ...] = ()
     relationship_profile_id: str = DEFAULT_PROFILE_ID
+    whitelist_alias_ids: tuple[str, ...] = ()
 
     @property
     def scope(self) -> RelationshipScope:
         return RelationshipScope(
-            self.bot_id,
-            self.user_id,
-            self.group_id,
-            self.person_id,
-            self.state_alias_keys,
-            self.relationship_profile_id,
+            bot_id=self.bot_id,
+            user_id=self.user_id,
+            group_id=self.group_id,
+            person_id=self.person_id,
+            state_alias_keys=self.state_alias_keys,
+            relationship_profile_id=self.relationship_profile_id,
+            whitelist_alias_ids=self.whitelist_alias_ids,
         )
 
     @property
@@ -151,8 +154,19 @@ class InteractionEvent:
 
     @property
     def relationship_whitelist_ids(self) -> tuple[str, ...]:
-        identity = self.relationship_user_id
-        return (identity, f"{self.relationship_profile_id}/{identity}")
+        identities = tuple(
+            dict.fromkeys(
+                value
+                for raw_value in (
+                    self.relationship_user_id,
+                    *self.whitelist_alias_ids,
+                )
+                if (value := str(raw_value or "").strip())
+            )
+        )
+        return identities + tuple(
+            f"{self.relationship_profile_id}/{identity}" for identity in identities
+        )
 
     @property
     def is_command(self) -> bool:

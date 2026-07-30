@@ -635,6 +635,37 @@ class ManagerTest(unittest.TestCase):
         self.assertEqual(mgr._states[scope.user_key].interaction_count, 1)
         self.assertEqual(mgr._states[scope.user_key].initial_prior, "")
 
+    def test_merged_prior_marker_cannot_be_overridden_without_original_event(self) -> None:
+        mgr = self._manager()
+        target = "persona:default:person:summer"
+        source = "persona:default:person:old-identity"
+        mgr._states[source] = UserRelationState(
+            affinity_score=64.0,
+            trust_score=60.0,
+            familiarity_score=25.0,
+            initial_prior="fond",
+            initial_prior_applied_at=900.0,
+        )
+        self.assertEqual(
+            _run(mgr.merge_identity_states(((target, (source,)),))),
+            (target,),
+        )
+        scope = RelationshipScope(
+            bot_id="bot",
+            user_id="u1",
+            person_id="summer",
+            relationship_profile_id="default",
+        )
+
+        with self.assertRaisesRegex(ValueError, "INITIAL_PRIOR_ALREADY_APPLIED"):
+            _run(
+                mgr.apply_initial_prior(
+                    scope,
+                    "acquainted",
+                    allow_active_relationship=True,
+                )
+            )
+
     def test_explicit_merge_counts_identical_independent_person_states(self) -> None:
         mgr = self._manager()
         target = "persona:default:person:summer"
@@ -674,6 +705,74 @@ class ManagerTest(unittest.TestCase):
         )
 
         self.assertGreater(delta.affinity, 0.0)
+
+    def test_bound_account_uid_alias_is_used_for_affinity_whitelist(self) -> None:
+        calculator = AffinityCalculator(
+            AffinityConfig(
+                praise_gain=2.0,
+                whitelist_user_ids=("default/raw-platform-id",),
+                non_whitelist_ceiling=50.0,
+            )
+        )
+        event = _event(
+            user_id="another-platform-id",
+            person_id="summer",
+            whitelist_alias_ids=("raw-platform-id", "raw-platform-id", ""),
+            kind=models.KIND_PRAISE,
+        )
+        state = models.UserRelationState(
+            affinity_score=50.0,
+            trust_score=80.0,
+            familiarity_score=40.0,
+        )
+
+        self.assertEqual(
+            event.relationship_whitelist_ids,
+            (
+                "summer",
+                "raw-platform-id",
+                "default/summer",
+                "default/raw-platform-id",
+            ),
+        )
+        self.assertEqual(
+            event.scope.whitelist_alias_ids,
+            ("raw-platform-id", "raw-platform-id", ""),
+        )
+        self.assertEqual(
+            RelationshipStateManager._event_with_timestamp(
+                event, 1234.0
+            ).whitelist_alias_ids,
+            event.whitelist_alias_ids,
+        )
+        self.assertEqual(calculator.compute(event, state).affinity, 2.0)
+
+    def test_unverified_current_uid_is_not_a_person_whitelist_alias(self) -> None:
+        calculator = AffinityCalculator(
+            AffinityConfig(
+                praise_gain=2.0,
+                whitelist_user_ids=("unverified-uid",),
+                non_whitelist_ceiling=50.0,
+                whitelist_trust_gate=0.0,
+                whitelist_familiarity_gate=0.0,
+            )
+        )
+        event = _event(
+            user_id="unverified-uid",
+            person_id="summer",
+            kind=models.KIND_PRAISE,
+        )
+        state = models.UserRelationState(
+            affinity_score=50.0,
+            trust_score=80.0,
+            familiarity_score=40.0,
+        )
+
+        self.assertEqual(
+            event.relationship_whitelist_ids,
+            ("summer", "default/summer"),
+        )
+        self.assertEqual(calculator.compute(event, state).affinity, 0.0)
 
     def test_daily_affinity_cap(self) -> None:
         mgr = self._manager(

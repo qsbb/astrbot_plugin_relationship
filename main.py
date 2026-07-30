@@ -91,7 +91,7 @@ from .core.request_context import (
 from .core.trust import TrustCalculator
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.6.6"
+__version__ = "0.6.7"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -453,6 +453,7 @@ class RelationshipPlugin(Star):
             person_id=person.person_id if person else person_id,
             state_alias_keys=aliases,
             relationship_profile_id=profile_id,
+            whitelist_alias_ids=person.account_user_ids if person else (),
         )
         applied, reason = self.manager._validate_event(interaction)
         if not applied:
@@ -526,6 +527,7 @@ class RelationshipPlugin(Star):
                 person_id=scope.person_id,
                 state_alias_keys=scope.state_alias_keys,
                 relationship_profile_id=scope.relationship_profile_id,
+                whitelist_alias_ids=scope.whitelist_alias_ids,
             )
             snapshot = await self.manager.record(interaction)
             resolved_identity = self._resolve_identity(event)
@@ -1007,8 +1009,11 @@ class RelationshipPlugin(Star):
                         and (observation or {}).get("session_id")
                     ),
                 }
-            whitelist_ids = {user_id, f"{profile_id}/{user_id}"}
-            whitelisted = bool(whitelist_ids.intersection(whitelist))
+            whitelisted = self._is_relationship_whitelisted(
+                profile_id,
+                user_id,
+                person.account_user_ids if person else (),
+            )
             users.append(
                 {
                     "user_id": user_id,
@@ -1198,11 +1203,15 @@ class RelationshipPlugin(Star):
             persons = self.identity_registry.list_persons()
             profile_ids = self._known_relationship_profiles()
             for person in persons:
+                identity = str(person.get("person_id") or "")
+                registered = self.identity_registry.get(identity)
                 person["whitelisted_relationship_profiles"] = [
                     profile_id
                     for profile_id in profile_ids
                     if self._is_relationship_whitelisted(
-                        profile_id, str(person.get("person_id") or "")
+                        profile_id,
+                        identity,
+                        registered.account_user_ids if registered else (),
                     )
                 ]
         bridge = self._memory_companion_bridge()
@@ -1219,12 +1228,28 @@ class RelationshipPlugin(Star):
         }
         return json_response(payload) if json_response else payload
 
-    def _is_relationship_whitelisted(self, profile_id: str, identity: str) -> bool:
-        identity = str(identity or "").strip()
-        if not identity:
+    def _is_relationship_whitelisted(
+        self,
+        profile_id: str,
+        identity: str,
+        alias_ids: tuple[str, ...] = (),
+    ) -> bool:
+        identities = tuple(
+            dict.fromkeys(
+                value
+                for raw_value in (identity, *alias_ids)
+                if (value := str(raw_value or "").strip())
+            )
+        )
+        if not identities:
             return False
         whitelist = set(self._affinity_config.whitelist_user_ids)
-        return bool({identity, f"{profile_id}/{identity}"}.intersection(whitelist))
+        whitelist_ids = {
+            value
+            for candidate in identities
+            for value in (candidate, f"{profile_id}/{candidate}")
+        }
+        return bool(whitelist_ids.intersection(whitelist))
 
     async def _page_save_identity(self):
         data = await self._request_json()
@@ -1331,11 +1356,14 @@ class RelationshipPlugin(Star):
                 person_id=person.person_id,
                 state_alias_keys=person.alias_state_keys_for(requested_profile),
                 relationship_profile_id=requested_profile,
+                whitelist_alias_ids=person.account_user_ids,
             )
             prior_result["requested"] = True
             try:
                 whitelist_override = self._is_relationship_whitelisted(
-                    requested_profile, person.person_id
+                    requested_profile,
+                    person.person_id,
+                    person.account_user_ids,
                 )
                 await self.manager.apply_initial_prior(
                     scope,
@@ -1388,8 +1416,38 @@ class RelationshipPlugin(Star):
             return "", ()
         return ",".join((*entries, *additions)), tuple(additions)
 
+    def _identity_merge_whitelist_plan(
+        self, source_person_id: str, target_person_id: str
+    ) -> tuple[str, tuple[str, ...]]:
+        """Replace source-person whitelist entries after an explicit merge."""
+        entries = tuple(dict.fromkeys(self._affinity_config.whitelist_user_ids))
+        updated: list[str] = []
+        additions: list[str] = []
+        for entry in entries:
+            replacement = ""
+            if entry == source_person_id:
+                replacement = target_person_id
+            else:
+                profile_id, separator, identity = entry.partition("/")
+                if separator and identity == source_person_id:
+                    try:
+                        profile_id = validate_profile_id(profile_id)
+                    except ValueError:
+                        profile_id = ""
+                    if profile_id:
+                        replacement = f"{profile_id}/{target_person_id}"
+            value = replacement or entry
+            updated.append(value)
+            if replacement and replacement not in entries:
+                additions.append(replacement)
+        updated = list(dict.fromkeys(updated))
+        additions = [item for item in dict.fromkeys(additions) if item not in entries]
+        if tuple(updated) == entries:
+            return "", ()
+        return ",".join(updated), tuple(additions)
+
     def _persist_whitelist_preservation(self, value: str) -> None:
-        """Persist an internally generated whitelist alias expansion via the overlay."""
+        """Persist an internally generated whitelist preservation update."""
         key = "AFFINITY_WHITELIST_USER_IDS"
         previous_overrides = dict(self._config_overrides)
         previous_baseline = dict(self._config_baseline)
@@ -1589,6 +1647,14 @@ class RelationshipPlugin(Star):
                     self._persist_whitelist_preservation(whitelist_value)
             else:
                 changed = self.manager.recover_identity_merge_states(bindings)
+                if mode in {"person", "orphan"}:
+                    recovery_stage = "whitelist"
+                    whitelist_value, _ = self._identity_merge_whitelist_plan(
+                        str(payload.get("source_person_id") or "").strip(),
+                        str(payload.get("target_person_id") or "").strip(),
+                    )
+                    if whitelist_value:
+                        self._persist_whitelist_preservation(whitelist_value)
         except Exception as exc:
             if mode == "unbind" and recovery_stage == "relationship":
                 source_person = payload.get("source_person")
@@ -1643,6 +1709,7 @@ class RelationshipPlugin(Star):
             identity_before = self.identity_registry.snapshot()
             identity_changed = False
             journal_written = False
+            config_locked = False
             operation_stage = "validation"
             try:
                 target = self.identity_registry.get(target_person_id)
@@ -1656,6 +1723,8 @@ class RelationshipPlugin(Star):
                 registered_source = None
                 intent_account: dict[str, str] = {}
                 intent_source_accounts: list[dict[str, str]] = []
+                whitelist_value = ""
+                whitelist_aliases: tuple[str, ...] = ()
 
                 if isinstance(account, dict):
                     _, _, expected_account = self.identity_registry.preview_merge_account(
@@ -1701,6 +1770,14 @@ class RelationshipPlugin(Star):
                         ):
                             raise ValueError("SOURCE_PERSON_NOT_FOUND")
 
+                    await self._config_write_lock.acquire()
+                    config_locked = True
+                    whitelist_value, whitelist_aliases = (
+                        self._identity_merge_whitelist_plan(
+                            source_person_id, target_person_id
+                        )
+                    )
+
                 profile_bindings = tuple(
                     (
                         target.relationship_key_for(profile_id),
@@ -1743,9 +1820,23 @@ class RelationshipPlugin(Star):
                     for profile_id in sorted(profile_ids)
                     if target.relationship_key_for(profile_id) in changed_keys
                 ]
+                if whitelist_value:
+                    operation_stage = "whitelist"
+                    self._persist_whitelist_preservation(whitelist_value)
                 self._clear_identity_merge_intent()
                 journal_written = False
             except ValueError as exc:
+                if operation_stage == "whitelist":
+                    payload = {
+                        "success": False,
+                        "error": "WHITELIST_PRESERVE_FAILED",
+                        "detail": str(exc) or type(exc).__name__,
+                    }
+                    return (
+                        json_response(payload, status_code=500)
+                        if json_response
+                        else payload
+                    )
                 rollback_error = None
                 if identity_changed:
                     try:
@@ -1768,6 +1859,17 @@ class RelationshipPlugin(Star):
                 payload = {"success": False, "error": str(exc) or "INVALID_MERGE"}
                 return json_response(payload, status_code=400) if json_response else payload
             except Exception as exc:
+                if operation_stage == "whitelist":
+                    payload = {
+                        "success": False,
+                        "error": "WHITELIST_PRESERVE_FAILED",
+                        "detail": str(exc) or type(exc).__name__,
+                    }
+                    return (
+                        json_response(payload, status_code=500)
+                        if json_response
+                        else payload
+                    )
                 rollback_error = None
                 if identity_changed:
                     try:
@@ -1794,6 +1896,9 @@ class RelationshipPlugin(Star):
                     ),
                 }
                 return json_response(payload, status_code=500) if json_response else payload
+            finally:
+                if config_locked:
+                    self._config_write_lock.release()
 
         payload = {
             "success": True,
@@ -1803,6 +1908,8 @@ class RelationshipPlugin(Star):
             "identity_changed": identity_changed,
             "state_merged": bool(merged_profiles),
             "merged_profiles": merged_profiles,
+            "whitelist_membership_preserved": True,
+            "whitelist_aliases_added": list(whitelist_aliases),
         }
         return json_response(payload) if json_response else payload
 
@@ -2523,6 +2630,7 @@ class RelationshipPlugin(Star):
             person_id=resolved.person.person_id,
             state_alias_keys=resolved.person.alias_state_keys_for(profile_id),
             relationship_profile_id=profile_id,
+            whitelist_alias_ids=resolved.person.account_user_ids,
         )
 
     def _account_memory_profile(self, account: Any) -> str:

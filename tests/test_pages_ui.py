@@ -187,8 +187,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("该账号已有互动，将保留现有关系", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.6.6", self.html)
-        self.assertIn("app.js?v=0.6.6", self.html)
+        self.assertIn("style.css?v=0.6.7", self.html)
+        self.assertIn("app.js?v=0.6.7", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)
