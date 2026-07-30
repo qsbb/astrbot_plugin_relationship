@@ -172,8 +172,10 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("relationship_profiles", self.js)
         self.assertIn("relationship_profile_id:", self.js)
         self.assertIn("initial_prior:", self.js)
+        self.assertIn('$("#initial-prior").disabled ? ""', self.js)
         self.assertIn("whitelisted_relationship_profiles", self.js)
-        self.assertIn("白名单关系可在已有互动后设置一次", self.js)
+        self.assertIn("白名单关系可在已有互动后设置或调整固定档位", self.js)
+        self.assertIn("initial_prior_by_profile", self.js)
 
     def test_account_memory_profile_is_editable(self) -> None:
         self.assertIn('data-account="memory_profile_id"', self.js)
@@ -185,10 +187,11 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("账号归属已保存，但初始关系未应用", self.js)
         self.assertIn("该关系已有互动，已保留现有关系", self.js)
         self.assertIn("该账号已有互动，将保留现有关系", self.js)
+        self.assertIn("只有白名单关系可以调整", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.6.7", self.html)
-        self.assertIn("app.js?v=0.6.7", self.html)
+        self.assertIn("style.css?v=0.6.8", self.html)
+        self.assertIn("app.js?v=0.6.8", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)

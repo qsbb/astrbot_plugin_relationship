@@ -1795,7 +1795,7 @@ class MainEntryTest(unittest.TestCase):
         self.assertEqual(state.trust_score, 60)
         self.assertEqual(state.familiarity_score, 25)
 
-    def test_whitelisted_active_identity_can_apply_initial_prior_once(self) -> None:
+    def test_whitelisted_active_identity_can_adjust_initial_prior(self) -> None:
         body = {
             "person_id": "summer",
             "display_name": "心夏",
@@ -1820,26 +1820,37 @@ class MainEntryTest(unittest.TestCase):
         last_event_at = state.last_event_at
 
         first = self._save_identity({**body, "initial_prior": "fond"})
+        first_state = self.plugin.manager._states["persona:default:person:summer"]
+        first_applied_at = first_state.initial_prior_applied_at
+        first_event_count = len(self.plugin.manager._events)
         second = self._save_identity({**body, "initial_prior": "acquainted"})
 
         self.assertTrue(first["initial_prior"]["applied"])
         self.assertTrue(first["initial_prior"]["whitelist_override"])
-        self.assertFalse(second["initial_prior"]["applied"])
-        self.assertEqual(
-            second["initial_prior"]["error"], "INITIAL_PRIOR_ALREADY_APPLIED"
-        )
+        self.assertTrue(second["initial_prior"]["applied"])
+        self.assertTrue(second["initial_prior"]["whitelist_override"])
         state = self.plugin.manager._states["persona:default:person:summer"]
-        self.assertEqual(state.affinity_score, 64)
-        self.assertEqual(state.trust_score, 60)
-        self.assertEqual(state.familiarity_score, 25)
+        self.assertEqual(state.affinity_score, 56)
+        self.assertEqual(state.trust_score, 55)
+        self.assertEqual(state.familiarity_score, 15)
+        self.assertEqual(state.initial_prior, "acquainted")
+        self.assertGreater(state.initial_prior_applied_at, first_applied_at)
         self.assertEqual(state.interaction_count, interaction_count)
         self.assertEqual(state.last_event_at, last_event_at)
+        self.assertEqual(len(self.plugin.manager._events), first_event_count + 1)
+        self.assertEqual(
+            len({event.event_id for event in self.plugin.manager._events}),
+            len(self.plugin.manager._events),
+        )
 
         identities = _run(self.plugin._page_identities())
         person = next(
             item for item in identities["persons"] if item["person_id"] == "summer"
         )
         self.assertEqual(person["whitelisted_relationship_profiles"], ["default"])
+        self.assertEqual(
+            person["initial_prior_by_profile"]["default"]["level"], "acquainted"
+        )
 
     def test_account_uid_whitelist_survives_binding_and_unlocks_prior(self) -> None:
         self._save_config({"AFFINITY_WHITELIST_USER_IDS": "user-1"})
@@ -1907,13 +1918,39 @@ class MainEntryTest(unittest.TestCase):
         self.assertTrue(first["initial_prior"]["applied"])
         self.assertTrue(first["initial_prior"]["whitelist_override"])
         self.assertEqual(first["initial_prior"]["level"], "fond")
-        self.assertFalse(second["initial_prior"]["applied"])
-        self.assertEqual(
-            second["initial_prior"]["error"], "INITIAL_PRIOR_ALREADY_APPLIED"
-        )
+        self.assertTrue(second["initial_prior"]["applied"])
+        self.assertTrue(second["initial_prior"]["whitelist_override"])
+        self.assertEqual(second["initial_prior"]["level"], "acquainted")
         state = self.plugin.manager._states["persona:default:person:summer"]
+        self.assertEqual(state.initial_prior, "acquainted")
+        self.assertEqual(state.affinity_score, 56)
+        self.assertEqual(state.trust_score, 55)
+        self.assertEqual(state.familiarity_score, 15)
         self.assertEqual(state.interaction_count, interaction_count)
         self.assertEqual(state.last_event_at, last_event_at)
+
+    def test_removed_whitelist_cannot_adjust_existing_initial_prior(self) -> None:
+        body = {
+            "person_id": "summer",
+            "display_name": "心夏",
+            "relationship_profile_id": "default",
+            "accounts": [
+                {"platform_id": "qq-main", "user_id": "user-1", "bot_id": "bot-1"}
+            ],
+        }
+        self._save_config({"AFFINITY_WHITELIST_USER_IDS": "default/summer"})
+        self.assertTrue(
+            self._save_identity({**body, "initial_prior": "fond"})["success"]
+        )
+        self._save_config({"AFFINITY_WHITELIST_USER_IDS": ""})
+
+        result = self._save_identity({**body, "initial_prior": "acquainted"})
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result["initial_prior"]["applied"])
+        self.assertEqual(
+            result["initial_prior"]["error"], "INITIAL_PRIOR_ALREADY_APPLIED"
+        )
 
     def test_active_non_whitelist_identity_cannot_apply_initial_prior(self) -> None:
         body = {

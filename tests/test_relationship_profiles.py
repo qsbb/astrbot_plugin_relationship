@@ -226,6 +226,67 @@ def test_initial_prior_is_fixed_audited_and_cannot_be_reapplied_after_reset() ->
     assert _run(manager.apply_initial_prior(other_profile, "neutral")).affinity == 50
 
 
+def test_whitelist_prior_reapply_replaces_scores_and_appends_audit() -> None:
+    manager = _manager()
+    scope = RelationshipScope(
+        bot_id="bot",
+        user_id="u1",
+        person_id="summer",
+        relationship_profile_id="persona-a",
+    )
+    manager._states[scope.user_key] = UserRelationState(
+        interaction_count=4,
+        last_event_at=900.0,
+        daily_affinity_positive_used=1.5,
+        daily_affinity_negative_used=0.5,
+        extra={"evidence_mass": 3.0},
+    )
+
+    _run(
+        manager.apply_initial_prior(
+            scope,
+            "fond",
+            allow_active_relationship=True,
+            allow_whitelist_reapply=True,
+        )
+    )
+    state = manager._states[scope.user_key]
+    first_applied_at = state.initial_prior_applied_at
+    first_event_id = manager._events[-1].event_id
+    _run(
+        manager.apply_initial_prior(
+            scope,
+            "fond",
+            allow_active_relationship=True,
+            allow_whitelist_reapply=True,
+        )
+    )
+    assert len(manager._events) == 1
+    _run(
+        manager.apply_initial_prior(
+            scope,
+            "acquainted",
+            allow_active_relationship=True,
+            allow_whitelist_reapply=True,
+        )
+    )
+
+    state = manager._states[scope.user_key]
+    assert state.initial_prior == "acquainted"
+    assert state.initial_prior_applied_at == first_applied_at
+    assert state.affinity_score == 56
+    assert state.trust_score == 55
+    assert state.familiarity_score == 15
+    assert state.interaction_count == 4
+    assert state.last_event_at == 900.0
+    assert state.daily_affinity_positive_used == 1.5
+    assert state.daily_affinity_negative_used == 0.5
+    assert state.extra["evidence_mass"] == 3.0
+    assert len(manager._events) == 2
+    assert manager._events[-1].event_id != first_event_id
+    assert manager._events[-1].rejection_reason == "admin_initial_prior_revision:acquainted"
+
+
 def test_initial_prior_rejects_an_active_relationship_and_numeric_levels() -> None:
     manager = _manager()
     scope = RelationshipScope(

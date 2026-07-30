@@ -1350,6 +1350,20 @@ class RelationshipPlugin(Star):
                         registered.account_user_ids if registered else (),
                     )
                 ]
+                initial_prior_by_profile: dict[str, dict[str, object]] = {}
+                if registered is not None:
+                    for profile_id in profile_ids:
+                        state = self.manager._states.get(
+                            registered.relationship_key_for(profile_id)
+                        )
+                        if state is None or state.initial_prior_applied_at <= 0:
+                            continue
+                        initial_prior_by_profile[profile_id] = {
+                            "applied": True,
+                            "level": state.initial_prior,
+                            "applied_at": state.initial_prior_applied_at,
+                        }
+                person["initial_prior_by_profile"] = initial_prior_by_profile
         bridge = self._memory_companion_bridge()
         payload = {
             "success": True,
@@ -1505,6 +1519,7 @@ class RelationshipPlugin(Star):
                     scope,
                     initial_prior,
                     allow_active_relationship=whitelist_override,
+                    allow_whitelist_reapply=whitelist_override,
                 )
                 prior_result["applied"] = True
                 prior_result["level"] = initial_prior

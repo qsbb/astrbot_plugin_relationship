@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import math
 import time
+import uuid
 from datetime import datetime
 from typing import Any, Callable
 
@@ -545,12 +546,18 @@ class RelationshipStateManager:
         prior: str,
         *,
         allow_active_relationship: bool = False,
+        allow_whitelist_reapply: bool = False,
     ) -> RelationshipSnapshot:
-        """Apply one fixed admin prior per relationship profile and natural person.
+        """Apply or, for a verified whitelist, replace a fixed admin prior.
 
         ``allow_active_relationship`` is reserved for an administrator-verified
         whitelist exception. It changes the three relationship scores while
         preserving interaction history and evidence metadata.
+
+        ``allow_whitelist_reapply`` is a separate whitelist-only correction
+        path. It replaces the current fixed prior without resetting interaction
+        counters, daily limits, or evidence, and appends a new audit record.
+        Ordinary callers remain one-shot and cannot use this path by default.
         """
         prior = str(prior or "").strip().lower()
         if prior not in INITIAL_RELATIONSHIP_PRIORS:
@@ -566,16 +573,32 @@ class RelationshipStateManager:
             dedupe_before = set(self._dedupe_keys)
             dirty_before = self._dirty
             try:
-                if any(
-                    record.applied
-                    and record.kind == KIND_INITIAL_PRIOR
-                    and record.scope_key == scope.user_key
-                    for record in self._events
-                ):
-                    raise ValueError("INITIAL_PRIOR_ALREADY_APPLIED")
+                prior_record = max(
+                    (
+                        record
+                        for record in self._events
+                        if record.applied
+                        and record.kind == KIND_INITIAL_PRIOR
+                        and record.scope_key == scope.user_key
+                    ),
+                    key=lambda record: record.timestamp,
+                    default=None,
+                )
                 state = self._materialize_bound_state(scope)
-                if state is not None and state.initial_prior_applied_at > 0:
+                prior_applied_at = max(
+                    float(state.initial_prior_applied_at) if state is not None else 0.0,
+                    float(prior_record.timestamp) if prior_record is not None else 0.0,
+                )
+                prior_already_applied = prior_applied_at > 0.0
+                if prior_applied_at > 0.0 and not allow_whitelist_reapply:
                     raise ValueError("INITIAL_PRIOR_ALREADY_APPLIED")
+                if (
+                    prior_already_applied
+                    and allow_whitelist_reapply
+                    and state is not None
+                    and state.initial_prior == prior
+                ):
+                    return self._snapshot(scope, self._safe_clock())
                 relationship_active = state is not None and (
                     state.interaction_count > 0
                     or state.last_event_at > 0
@@ -595,10 +618,21 @@ class RelationshipStateManager:
                 state.trust_epistemic = trust
                 state.familiarity_score = familiarity
                 state.initial_prior = prior
-                state.initial_prior_applied_at = now
+                state.initial_prior_applied_at = max(prior_applied_at, now)
                 self._states[scope.user_key] = state
                 for alias_key in scope.state_alias_keys:
                     self._states.pop(alias_key, None)
+                revision = prior_already_applied
+                audit_id = (
+                    f"initial-prior-revision:{scope.user_key}:{uuid.uuid4().hex}"
+                    if revision
+                    else f"initial-prior:{scope.user_key}"
+                )
+                audit_reason = (
+                    f"admin_initial_prior_revision:{prior}"
+                    if revision
+                    else f"admin_initial_prior:{prior}"
+                )
                 event = InteractionEvent(
                     bot_id=scope.bot_id,
                     user_id=scope.user_id,
@@ -606,11 +640,11 @@ class RelationshipStateManager:
                     text="",
                     timestamp=now,
                     kind=KIND_INITIAL_PRIOR,
-                    event_id=f"initial-prior:{scope.user_key}",
+                    event_id=audit_id,
                     source=SOURCE_ADMIN,
                     confidence=1.0,
                     severity=1.0,
-                    dedupe_key=f"initial-prior:{scope.user_key}",
+                    dedupe_key=audit_id,
                     person_id=scope.person_id,
                     state_alias_keys=scope.state_alias_keys,
                     relationship_profile_id=scope.relationship_profile_id,
@@ -623,7 +657,7 @@ class RelationshipStateManager:
                     dedupe_key,
                     now,
                     True,
-                    f"admin_initial_prior:{prior}",
+                    audit_reason,
                 )
                 self._dirty = True
                 self._save(raise_errors=True)

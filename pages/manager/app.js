@@ -348,10 +348,14 @@ function accountRow(account = {}) {
     + `</div>`;
 }
 
-function setInitialPriorAvailability(enabled, hint = "仅能为尚未产生互动的新关系设置一次。") {
+function setInitialPriorAvailability(
+  enabled,
+  hint = "仅能为尚未产生互动的新关系设置一次。",
+  { clearValue = true } = {}
+) {
   const select = $("#initial-prior");
   select.disabled = !enabled;
-  if (!enabled) select.value = "";
+  if (!enabled && clearValue) select.value = "";
   $("#initial-prior-hint").textContent = hint;
 }
 
@@ -359,10 +363,23 @@ function updateInitialPriorForEditingIdentity() {
   if (!editingIdentity) return;
   const selectedProfile = $("#relationship-profile-id").value;
   const whitelistProfiles = editingIdentity.whitelisted_relationship_profiles || [];
+  const currentPrior = editingIdentity.initial_prior_by_profile?.[selectedProfile] || null;
+  const hasCurrentPrior = currentPrior?.applied === true || Boolean(currentPrior?.level);
+  $("#initial-prior").value = currentPrior?.level || "";
   if (whitelistProfiles.includes(selectedProfile)) {
     setInitialPriorAvailability(
       true,
-      "白名单关系可在已有互动后设置一次；会保留互动历史，并把关系分数调整到所选固定档位。"
+      hasCurrentPrior
+        ? `当前固定档位：${currentPrior.level || "未记录"}。白名单关系可重新调整；会保留互动历史，并替换关系分数。`
+        : "白名单关系可在已有互动后设置或调整固定档位；会保留互动历史，不会叠加互动次数。"
+    );
+    return;
+  }
+  if (hasCurrentPrior) {
+    setInitialPriorAvailability(
+      false,
+      "该关系已设置固定初始关系；如需调整，请先把自然人加入当前关系人格的白名单。",
+      { clearValue: false }
     );
     return;
   }
@@ -625,7 +642,7 @@ function collectIdentity() {
     person_id: $("#person-id").value.trim(),
     display_name: $("#person-display-name").value.trim(),
     relationship_profile_id: $("#relationship-profile-id").value,
-    initial_prior: $("#initial-prior").value,
+    initial_prior: $("#initial-prior").disabled ? "" : $("#initial-prior").value,
     accounts,
   };
 }
@@ -646,7 +663,7 @@ async function saveIdentity() {
       if (errorCode === "RELATIONSHIP_ALREADY_ACTIVE") {
         toast("账号归属已保存；该关系已有互动，已保留现有关系");
       } else if (errorCode === "INITIAL_PRIOR_ALREADY_APPLIED") {
-        toast("账号归属已保存；初始关系此前已设置过，本次未重复应用");
+        toast("账号归属已保存；该关系已设置过固定初始关系，只有白名单关系可以调整");
       } else {
         toast(`账号归属已保存，但初始关系未应用（${errorCode}）`, true);
       }
