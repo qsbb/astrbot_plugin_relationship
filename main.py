@@ -32,7 +32,6 @@ except ImportError:
     json_response = None
     request = None
 
-from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
@@ -94,9 +93,15 @@ from .core.request_context import (
     set_flag,
 )
 from .core.trust import TrustCalculator
+from .series_diagnostics import (
+    diagnostic_clear as clear_diagnostic_events,
+    diagnostic_event,
+    diagnostic_events as read_diagnostic_events,
+    logger,
+)
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.6.8"
+__version__ = "0.7.0"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -121,7 +126,7 @@ _PUBLIC_EVENT_KINDS = tuple(sorted(SEMANTIC_KINDS - {KIND_INITIAL_PRIOR}))
 
 @register(
     PLUGIN_NAME,
-    "Justice-ocr",
+    "凌溪",
     "凝心溯溪-情，统一管理情绪、好感、信任与熟悉度",
     __version__,
 )
@@ -135,6 +140,7 @@ class RelationshipPlugin(Star):
         super().__init__(context)
         self.context = context
         self.logger = logger
+        diagnostic_event("plugin.init", "关系状态插件开始初始化")
         self._raw_config = self._coerce_config(config)
         self._native_config = (
             config if callable(getattr(config, "save_config", None)) else None
@@ -197,6 +203,15 @@ class RelationshipPlugin(Star):
         self._register_pages_web_api()
         RelationshipPlugin._current_instance = self
         self.logger.info("[relationship] 凝心溯溪-情 v%s 已加载", __version__)
+        diagnostic_event(
+            "plugin.ready",
+            "关系插件初始化完成",
+            details={
+                "mood_enabled": self._mood_enabled,
+                "cross_platform_memory_enabled": self._cross_platform_memory_enabled,
+                "identity_transaction_pending": self._identity_transaction_pending(),
+            },
+        )
 
     def plugin_health(self) -> dict[str, object]:
         checks = {
@@ -216,6 +231,22 @@ class RelationshipPlugin(Star):
             "reasons": reasons,
             "version": __version__,
         }
+
+    def diagnostic_log_contract(self) -> dict[str, object]:
+        return {
+            "name": "series.diagnostics",
+            "version": "1.0",
+            "plugin": PLUGIN_NAME,
+            "capabilities": ("read", "clear"),
+            "storage": "memory_only",
+            "astrbot_log_propagation": False,
+        }
+
+    def diagnostic_events(self, after_seq: int = 0, limit: int = 200) -> dict[str, Any]:
+        return read_diagnostic_events(after_seq=after_seq, limit=limit)
+
+    def diagnostic_clear(self) -> None:
+        clear_diagnostic_events()
 
     def relationship_snapshot_contract(self) -> dict[str, object]:
         """声明供“言”等消费方使用的只读关系快照契约。"""
@@ -2605,6 +2636,7 @@ class RelationshipPlugin(Star):
             self._continuity_identity_secret = secrets.token_bytes(32)
             if RelationshipPlugin._current_instance is self:
                 RelationshipPlugin._current_instance = None
+        diagnostic_event("plugin.terminated", "关系插件已卸载，长期状态已保存")
         self.logger.info("[relationship] 插件已卸载，长期状态已保存")
 
     # ------------------------------------------------------------------
