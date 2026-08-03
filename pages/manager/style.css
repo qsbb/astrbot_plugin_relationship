@@ -2,12 +2,21 @@
   color-scheme: dark;
   --bg: #07111d;
   --panel: #0d1b2a;
+  --panel-2: #102236;
+  --panel-3: #0b1826;
+  --track: #071522;
+  --chip: #26364a;
   --line: #24364a;
   --text: #e9f1fb;
   --muted: #91a4ba;
   --accent: #5dd6c0;
+  --accent-soft: rgba(93, 214, 192, .12);
   --warn: #ffb86b;
+  --warn-soft: rgba(255, 184, 107, .12);
   --danger: #ff7b72;
+  --danger-soft: rgba(255, 123, 114, .12);
+  --danger-text: #ffb5b0;
+  --info: #72b7f2;
 }
 
 * { box-sizing: border-box; }
@@ -17,19 +26,23 @@ body {
   min-height: 100vh;
   font: 14px/1.55 Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif;
   color: var(--text);
-  background: radial-gradient(circle at top right, #12344a 0, transparent 34%), var(--bg);
+  background: var(--bg);
 }
 
-button { font: inherit; }
 button {
+  font: inherit;
   cursor: pointer;
   color: var(--text);
-  background: #102236;
+  background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 10px 12px;
 }
 button:hover { border-color: var(--accent); }
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 button:disabled { cursor: wait; opacity: .55; }
 
 .shell {
@@ -48,7 +61,7 @@ button:disabled { cursor: wait; opacity: .55; }
 
 .hero h1 {
   margin: 2px 0;
-  font-size: clamp(28px, 4vw, 46px);
+  font-size: clamp(24px, 3vw, 32px);
 }
 .hero p,
 .section-heading p {
@@ -85,7 +98,7 @@ button:disabled { cursor: wait; opacity: .55; }
 .metric {
   border: 1px solid var(--line);
   border-radius: 16px;
-  background: linear-gradient(145deg, rgba(17, 38, 58, .96), rgba(10, 25, 39, .96));
+  background: var(--panel);
   box-shadow: 0 16px 44px rgba(0, 0, 0, .2);
 }
 .card { padding: 22px; margin-bottom: 16px; }
@@ -109,19 +122,19 @@ button:disabled { cursor: wait; opacity: .55; }
   border-radius: 999px;
   padding: 4px 9px;
   font-size: 12px;
-  background: #26364a;
+  background: var(--chip);
 }
 .pill.ok {
   color: var(--accent);
-  background: rgba(93, 214, 192, .12);
+  background: var(--accent-soft);
 }
 .pill.warn {
   color: var(--warn);
-  background: rgba(255, 184, 107, .12);
+  background: var(--warn-soft);
 }
 .pill.danger {
-  color: #ffb5b0;
-  background: rgba(255, 123, 114, .12);
+  color: var(--danger-text);
+  background: var(--danger-soft);
 }
 
 .policy-grid {
@@ -134,7 +147,7 @@ button:disabled { cursor: wait; opacity: .55; }
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #102236;
+  background: var(--panel-2);
 }
 .policy-grid span { display: block; color: var(--muted); font-size: 12px; }
 .policy-grid strong { display: block; margin-top: 5px; font-size: 21px; }
@@ -159,7 +172,7 @@ button:disabled { cursor: wait; opacity: .55; }
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: #071522;
+  background: var(--track);
 }
 .bar-fill {
   height: 100%;
@@ -167,8 +180,8 @@ button:disabled { cursor: wait; opacity: .55; }
   background: var(--accent);
   transition: width .35s ease;
 }
-.band-row:nth-child(2) .bar-fill { background: #72b7f2; }
-.band-row:nth-child(3) .bar-fill { background: #91a4ba; }
+.band-row:nth-child(2) .bar-fill { background: var(--info); }
+.band-row:nth-child(3) .bar-fill { background: var(--muted); }
 .band-row:nth-child(4) .bar-fill { background: var(--warn); }
 .band-row:nth-child(5) .bar-fill { background: var(--danger); }
 .band-count { text-align: right; color: var(--muted); }
@@ -191,7 +204,7 @@ button:disabled { cursor: wait; opacity: .55; }
   height: 38px;
   border-radius: 12px;
   color: var(--accent);
-  background: rgba(93, 214, 192, .12);
+  background: var(--accent-soft);
   font-size: 16px;
   font-weight: 700;
 }
@@ -229,7 +242,7 @@ th {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
-  background: #0b1826;
+  background: var(--panel-3);
   box-shadow: 0 1px 0 var(--line);
 }
 .user-id { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.4; }
@@ -242,12 +255,12 @@ tbody tr:hover { background: rgba(93, 214, 192, .045); }
   border-radius: 999px;
   padding: 3px 9px;
   color: var(--muted);
-  background: #26364a;
+  background: var(--chip);
   font-size: 12px;
 }
 .badge.ok,
-.badge.safe { color: var(--accent); background: rgba(93, 214, 192, .12); }
-.badge.warn { color: var(--warn); background: rgba(255, 184, 107, .12); }
+.badge.safe { color: var(--accent); background: var(--accent-soft); }
+.badge.warn { color: var(--warn); background: var(--warn-soft); }
 .quick-edit-command {
   padding: 7px 10px;
   border-radius: 8px;
@@ -275,7 +288,7 @@ tbody tr:hover { background: rgba(93, 214, 192, .045); }
   padding: 10px;
   border: 1px solid rgba(255, 123, 114, .42);
   border-radius: 8px;
-  background: #0b1826;
+  background: var(--panel-3);
   white-space: normal;
 }
 .relationship-detail-row td { padding: 10px 12px 12px; background: rgba(7, 17, 29, .22); }
@@ -291,11 +304,11 @@ tbody tr:hover { background: rgba(93, 214, 192, .045); }
   width: 100%;
   padding: 8px 9px;
   color: var(--text);
-  background: #102236;
+  background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: 8px;
 }
-.relationship-delete-confirmation select:focus { outline: none; border-color: var(--accent); }
+.relationship-delete-confirmation select:focus { border-color: var(--accent); }
 .relationship-delete-confirmation button { align-self: end; padding: 8px 10px; }
 .relationship-delete-confirmation small {
   grid-column: 1 / -1;
@@ -307,6 +320,7 @@ tbody tr:hover { background: rgba(93, 214, 192, .045); }
   position: fixed;
   right: 24px;
   bottom: 24px;
+  max-width: calc(100vw - 48px);
   opacity: 1;
   transform: none;
   transition: .2s;
@@ -335,7 +349,7 @@ button.primary:disabled { opacity: .55; }
   font-size: 24px;
   line-height: 1;
 }
-.danger-command { color: #ffb5b0; }
+.danger-command { color: var(--danger-text); }
 .identity-grid {
   display: grid;
   grid-template-columns: minmax(300px, .8fr) minmax(480px, 1.2fr);
@@ -355,7 +369,7 @@ button.primary:disabled { opacity: .55; }
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #102236;
+  background: var(--panel-2);
 }
 .identity-item > div:first-child { min-width: 0; }
 .identity-item strong,
@@ -398,7 +412,7 @@ button.primary:disabled { opacity: .55; }
   width: 100%;
   padding: 9px 10px;
   color: var(--text);
-  background: #0b1826;
+  background: var(--panel-3);
   border: 1px solid var(--line);
   border-radius: 8px;
 }
@@ -428,7 +442,7 @@ button.primary:disabled { opacity: .55; }
   width: 100%;
   padding: 9px 10px;
   color: var(--text);
-  background: #102236;
+  background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: 8px;
 }
@@ -453,13 +467,13 @@ button.primary:disabled { opacity: .55; }
   width: 100%;
   padding: 9px 10px;
   color: var(--text);
-  background: #102236;
+  background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: 8px;
 }
 .identity-fields input:focus,
 .identity-fields select:focus,
-.account-row input:focus { outline: none; border-color: var(--accent); }
+.account-row input:focus { border-color: var(--accent); }
 .identity-fields small {
   color: var(--muted);
   font-size: 11px;
@@ -524,14 +538,13 @@ button.primary:disabled { opacity: .55; }
   padding: 8px 10px;
   font: inherit;
   color: var(--text);
-  background: #102236;
+  background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: 8px;
 }
 .config-input input[type="number"]:focus,
 .config-input input[type="text"]:focus,
 .config-input select:focus {
-  outline: none;
   border-color: var(--accent);
 }
 .config-input input.config-text-wide { max-width: 100%; }
@@ -556,7 +569,6 @@ button.primary:disabled { opacity: .55; }
   .identity-merge-panel { grid-template-columns: 1fr; align-items: stretch; }
   .account-row { grid-template-columns: repeat(2, minmax(0, 1fr)) 40px; }
   .account-row .icon-command { grid-column: 3; grid-row: 1 / span 3; }
-  .table-wrap { width: calc(100% + 32px); margin-right: -16px; margin-left: -16px; }
   table,
   tbody { display: block; }
   colgroup,

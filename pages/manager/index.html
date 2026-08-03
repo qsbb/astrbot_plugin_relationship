@@ -4,13 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-情 · 关系状态</title>
-    <link rel="stylesheet" href="./style.css?v=0.7.0" />
+  <link rel="stylesheet" href="./style.css?v=0.7.1-1" />
 </head>
 <body>
   <main class="shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">AstrBot Plugin Page</p>
+        <p class="eyebrow">AstrBot 插件管理页</p>
         <h1>凝心溯溪-情</h1>
         <p>关系分层、好感分布、信任门槛与边界状态可视化</p>
       </div>
@@ -19,13 +19,13 @@
       </div>
     </header>
 
-    <nav class="tabs" aria-label="关系页面分区">
-      <button class="active" type="button" data-tab="overview">关系总览</button>
-      <button type="button" data-tab="identities">账号归属</button>
-      <button type="button" data-tab="settings">设置</button>
+    <nav class="tabs" role="tablist" aria-label="关系页面分区">
+      <button class="active" type="button" role="tab" aria-selected="true" data-tab="overview">关系总览</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="identities">账号归属</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="settings">设置</button>
     </nav>
 
-    <section class="panel active" data-panel="overview">
+    <section class="panel active" role="tabpanel" data-panel="overview">
       <div class="cards" aria-label="关系概览">
         <article class="metric"><span>关系总数</span><strong data-stat="user_count">—</strong></article>
         <article class="metric"><span>高好感 / 信任圈</span><strong class="accent" data-stat="high_affinity_count">—</strong></article>
@@ -71,6 +71,7 @@
       <article class="card table-card">
         <div class="section-heading">
           <div><h2>关系明细</h2><p>状态由事件规则计算，页面不提供直接改分入口。</p></div>
+          <span class="pill" id="relation-count" aria-live="polite">—</span>
         </div>
         <div class="table-wrap">
           <table>
@@ -85,14 +86,14 @@
               <col class="relation-col-time" />
               <col class="relation-col-actions" />
             </colgroup>
-            <thead><tr><th>用户</th><th>关系人格</th><th>关系层级</th><th>好感</th><th>信任</th><th>熟悉度</th><th>互动</th><th>白名单</th><th>边界</th><th>最后互动</th><th>操作</th></tr></thead>
+            <thead><tr><th scope="col">用户</th><th scope="col">关系人格</th><th scope="col">关系层级</th><th scope="col">好感</th><th scope="col">信任</th><th scope="col">熟悉度</th><th scope="col">互动</th><th scope="col">白名单</th><th scope="col">边界</th><th scope="col">最后互动</th><th scope="col">操作</th></tr></thead>
             <tbody id="relation-tbody"><tr class="empty-row"><td colspan="11">加载中…</td></tr></tbody>
           </table>
         </div>
       </article>
     </section>
 
-    <section class="panel" data-panel="identities">
+    <section class="panel" role="tabpanel" data-panel="identities">
       <div class="identity-grid">
         <article class="card">
           <div class="section-heading">
@@ -147,7 +148,7 @@
       </div>
     </section>
 
-    <section class="panel" data-panel="settings">
+    <section class="panel" role="tabpanel" data-panel="settings">
       <article class="card">
         <div class="section-heading">
           <div>
@@ -166,6 +167,6 @@
     <div id="toast" class="hidden" role="status" aria-live="polite"></div>
   </main>
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-    <script type="module" src="./app.js?v=0.7.0"></script>
+  <script type="module" src="./app.js?v=0.7.1-1"></script>
 </body>
 </html>

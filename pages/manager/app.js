@@ -99,6 +99,7 @@ function toast(message, error = false) {
   if (!element) return;
   element.textContent = message;
   element.classList.toggle("error", error);
+  element.setAttribute("role", error ? "alert" : "status");
   element.classList.remove("hidden");
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => element.classList.add("hidden"), 3000);
@@ -162,6 +163,8 @@ function render(payload) {
 
   const users = payload?.users || [];
   overviewUsers = users;
+  const countElement = $("#relation-count");
+  if (countElement) countElement.textContent = `共 ${users.length} 条`;
   const tbody = $("#relation-tbody");
   if (!users.length) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="11">暂无关系记录</td></tr>';
@@ -209,14 +212,20 @@ function render(payload) {
 
 async function load() {
   const button = $("#btn-refresh");
-  if (button) button.disabled = true;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "刷新中…";
+  }
   try {
     render(await apiGet("overview"));
   } catch (error) {
     toast(`加载关系状态失败：${error?.message || String(error)}`, true);
-    $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="11">加载失败</td></tr>';
+    $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="11">加载失败，请稍后重试</td></tr>';
   } finally {
-    if (button) button.disabled = false;
+    if (button) {
+      button.disabled = false;
+      button.textContent = "刷新";
+    }
   }
 }
 
@@ -289,6 +298,7 @@ async function loadConfig() {
 
 function collectConfigChanges() {
   const changes = {};
+  const invalid = [];
   document.querySelectorAll("#config-form [data-key]").forEach((el) => {
     const key = el.dataset.key;
     if (el.type === "checkbox") {
@@ -305,29 +315,45 @@ function collectConfigChanges() {
       } else {
         value = raw;
       }
+      if ((field.type === "int" || field.type === "float") && Number.isNaN(value)) {
+        invalid.push(field.description || key);
+        return;
+      }
       if (!Object.is(value, configValues[key])) changes[key] = value;
     }
   });
-  return changes;
+  return { changes, invalid };
 }
 
 async function saveConfig() {
   const button = $("#btn-save-config");
-  if (button) button.disabled = true;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "保存中…";
+  }
   try {
-    const changes = collectConfigChanges();
+    const { changes, invalid } = collectConfigChanges();
     if (!Object.keys(changes).length) {
-      toast("没有需要保存的变更");
+      toast(invalid.length
+        ? `以下配置不是有效数字，未保存：${invalid.join("、")}`
+        : "没有需要保存的变更", invalid.length > 0);
       return;
     }
     const data = await apiPost("config", changes);
     configValues = data.config || {};
     renderConfigForm(configSchema, configValues);
-    toast(data.restart_required ? "配置已保存；旧数据归属需重启后生效" : "配置已保存并热应用");
+    if (invalid.length) {
+      toast(`有效配置已保存；以下数字项无效，未提交：${invalid.join("、")}`, true);
+    } else {
+      toast(data.restart_required ? "配置已保存；旧数据归属需重启后生效" : "配置已保存并热应用");
+    }
   } catch (error) {
     toast(`保存配置失败：${error?.message || String(error)}`, true);
   } finally {
-    if (button) button.disabled = false;
+    if (button) {
+      button.disabled = false;
+      button.textContent = "保存";
+    }
   }
 }
 
@@ -474,11 +500,21 @@ function editIdentity(person) {
   $("#btn-save-person").textContent = "保存账号归属";
 }
 
+function scrollToIdentityEditor() {
+  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+  document.querySelector(".identity-editor")?.scrollIntoView({
+    behavior: reduceMotion ? "auto" : "smooth",
+    block: "start",
+  });
+}
+
 function activateTab(target) {
   if (target !== "identities") resetIdentityMergeConfirmation();
   if (target !== "overview") clearRelationshipDeleteConfirmation();
   document.querySelectorAll(".tabs button[data-tab]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.tab === target);
+    const active = button.dataset.tab === target;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
   });
   document.querySelectorAll(".panel[data-panel]").forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.panel === target);
@@ -501,7 +537,7 @@ async function quickEditRelationship(index) {
       return;
     }
     editIdentity(person);
-    document.querySelector(".identity-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollToIdentityEditor();
     return;
   }
 
@@ -518,7 +554,7 @@ async function quickEditRelationship(index) {
     $("#btn-add-account").hidden = true;
     $("#btn-save-person").hidden = true;
     showIdentityMerge({ type: "orphan", source_person_id: user.orphaned_person_id });
-    document.querySelector(".identity-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollToIdentityEditor();
     return;
   }
 
@@ -541,7 +577,7 @@ async function quickEditRelationship(index) {
   toast(missing.length
     ? `已填入可确认字段；缺少${missing.join("、")}，请先私聊 Bot 一次后刷新`
     : "已自动填入最近一次真实私聊的账号信息，请确认后保存");
-  document.querySelector(".identity-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  scrollToIdentityEditor();
 }
 
 function renderRelationshipProfileOptions(selectedProfile) {
@@ -649,7 +685,9 @@ function collectIdentity() {
 
 async function saveIdentity() {
   const button = $("#btn-save-person");
+  const originalLabel = button.textContent;
   button.disabled = true;
+  button.textContent = "保存中…";
   try {
     const payload = collectIdentity();
     if (!payload.display_name || !payload.accounts.length) {
@@ -672,6 +710,7 @@ async function saveIdentity() {
     }
   } catch (error) {
     toast(`保存失败：${error?.message || String(error)}`, true);
+    button.textContent = originalLabel;
   } finally {
     button.disabled = false;
   }
@@ -878,7 +917,7 @@ function initIdentityEditor() {
       clearDeleteConfirmation();
       editIdentity(person);
       showIdentityMerge({ type: "person", source_person_id: person.person_id });
-      document.querySelector(".identity-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      scrollToIdentityEditor();
     }
     if (action === "delete") armDeleteIdentity(item.dataset.personId);
     if (action === "confirm-delete") deleteIdentity(item.dataset.personId, event.target.closest("button"));
@@ -935,12 +974,14 @@ async function init() {
     const editButton = event.target.closest("[data-quick-edit]");
     if (editButton) quickEditRelationship(Number(editButton.dataset.quickEdit));
   });
-  await load();
-  await loadConfig();
-  await loadIdentities();
+  await Promise.allSettled([load(), loadConfig(), loadIdentities()]);
 }
 
 init().catch((error) => {
   toast(`页面启动失败：${error?.message || String(error)}`, true);
   $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="11">页面启动失败</td></tr>';
+  const configForm = $("#config-form");
+  if (configForm) configForm.innerHTML = '<p class="config-loading">页面启动失败，无法加载配置</p>';
+  const identityList = $("#identity-list");
+  if (identityList) identityList.innerHTML = '<p class="config-loading">页面启动失败，无法加载账号归属</p>';
 });

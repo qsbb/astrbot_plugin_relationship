@@ -156,7 +156,7 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn('colspan="11"', self.js)
 
     def test_overview_has_quick_identity_editor(self) -> None:
-        self.assertIn("<th>操作</th>", self.html)
+        self.assertIn('<th scope="col">操作</th>', self.html)
         self.assertIn('data-quick-edit="${index}"', self.js)
         self.assertIn("async function quickEditRelationship(", self.js)
         self.assertIn('activateTab("identities")', self.js)
@@ -190,8 +190,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("只有白名单关系可以调整", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.7.0", self.html)
-        self.assertIn("app.js?v=0.7.0", self.html)
+        self.assertIn("style.css?v=0.7.1-1", self.html)
+        self.assertIn("app.js?v=0.7.1-1", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)
@@ -231,6 +231,79 @@ class PagesUiTest(unittest.TestCase):
         self.assertNotIn("min-width: 1010px", self.css)
         self.assertIn('data-label="最后互动"', self.js)
         self.assertIn("relationship-detail-row", self.js)
+
+    def test_init_loads_sections_in_parallel(self) -> None:
+        self.assertIn(
+            "await Promise.allSettled([load(), loadConfig(), loadIdentities()])",
+            self.js,
+        )
+        self.assertNotIn("await load();\n  await loadConfig();", self.js)
+
+    def test_init_failure_marks_all_panels(self) -> None:
+        self.assertIn("页面启动失败，无法加载配置", self.js)
+        self.assertIn("页面启动失败，无法加载账号归属", self.js)
+
+    def test_tabs_expose_aria_selected_state(self) -> None:
+        self.assertIn('role="tablist"', self.html)
+        self.assertIn('role="tabpanel"', self.html)
+        self.assertIn('aria-selected="true"', self.html)
+        self.assertIn('aria-selected="false"', self.html)
+        self.assertIn('button.setAttribute("aria-selected"', self.js)
+
+    def test_table_headers_have_scope(self) -> None:
+        self.assertIn('<th scope="col">用户</th>', self.html)
+        self.assertNotIn("<th>用户</th>", self.html)
+
+    def test_overview_shows_relation_count(self) -> None:
+        self.assertIn('id="relation-count"', self.html)
+        self.assertIn('$("#relation-count")', self.js)
+        self.assertIn("共 ${users.length} 条", self.js)
+
+    def test_invalid_numeric_config_is_not_submitted(self) -> None:
+        self.assertIn("Number.isNaN(value)", self.js)
+        self.assertIn("invalid.push(field.description || key)", self.js)
+        self.assertIn("以下配置不是有效数字，未保存：", self.js)
+        self.assertIn("有效配置已保存；以下数字项无效，未提交：", self.js)
+
+    def test_error_toast_uses_alert_role(self) -> None:
+        self.assertIn(
+            'element.setAttribute("role", error ? "alert" : "status")', self.js
+        )
+
+    def test_busy_buttons_restore_labels(self) -> None:
+        self.assertIn('button.textContent = "保存中…";', self.js)
+        self.assertIn('button.textContent = "刷新中…";', self.js)
+        self.assertIn('button.textContent = "保存";', self.js)
+        self.assertIn('button.textContent = "刷新";', self.js)
+        self.assertIn("const originalLabel = button.textContent;", self.js)
+
+    def test_editor_scrolling_respects_reduced_motion(self) -> None:
+        self.assertIn("function scrollToIdentityEditor()", self.js)
+        self.assertIn('"(prefers-reduced-motion: reduce)"', self.js)
+        self.assertNotIn('behavior: "smooth", block: "start" });', self.js)
+
+    def test_css_uses_series_color_tokens(self) -> None:
+        for token in (
+            "--panel-2:",
+            "--panel-3:",
+            "--track:",
+            "--chip:",
+            "--accent-soft:",
+            "--warn-soft:",
+            "--danger-soft:",
+            "--danger-text:",
+            "--info:",
+        ):
+            self.assertIn(token, self.css)
+        self.assertNotIn("background: #102236;", self.css)
+        self.assertNotIn("background: #0b1826;", self.css)
+        self.assertNotIn("linear-gradient(145deg", self.css)
+        self.assertNotIn("radial-gradient(circle at top right", self.css)
+
+    def test_css_has_keyboard_focus_and_toast_bounds(self) -> None:
+        self.assertIn("button:focus-visible", self.css)
+        self.assertIn("outline-offset: 2px", self.css)
+        self.assertIn("max-width: calc(100vw - 48px)", self.css)
 
 
 if __name__ == "__main__":
