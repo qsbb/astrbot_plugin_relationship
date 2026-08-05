@@ -60,6 +60,10 @@ from .core.config import (
 )
 from .core.familiarity import FamiliarityCalculator
 from .core.identity_registry import IdentityRegistry, PlatformAccount, ResolvedIdentity
+from .core.identity_candidates import (
+    identity_candidate_rows,
+    validate_identity_candidates,
+)
 from .core.manager import INITIAL_RELATIONSHIP_PRIORS, RelationshipStateManager
 from .core.models import (
     HIGH_TRUST_EVENT_SOURCES,
@@ -101,7 +105,7 @@ from .series_diagnostics import (
 )
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -117,6 +121,8 @@ DELIVERY_IDENTITY_CONTRACT_NAME = "relationship.delivery_identity"
 DELIVERY_IDENTITY_CONTRACT_VERSION = "1.0"
 CONTINUITY_IDENTITY_CONTRACT_NAME = "relationship.continuity_identity"
 CONTINUITY_IDENTITY_CONTRACT_VERSION = "1.0"
+IDENTITY_CANDIDATES_CONTRACT_NAME = "relationship.identity_candidates"
+IDENTITY_CANDIDATES_CONTRACT_VERSION = "1.0"
 _PRIVATE_UMO_MESSAGE_TYPES = frozenset(
     {"friendmessage", "privatemessage", "directmessage"}
 )
@@ -295,6 +301,43 @@ class RelationshipPlugin(Star):
             "exposes_raw_account_ids": False,
             "grants_permission": False,
             "key_lifetime": "process",
+        }
+
+    def identity_candidates_contract(self) -> dict[str, object]:
+        """Declare the privacy-minimized read-only natural-person directory."""
+        return {
+            "name": IDENTITY_CANDIDATES_CONTRACT_NAME,
+            "version": IDENTITY_CANDIDATES_CONTRACT_VERSION,
+            "plugin": PLUGIN_NAME,
+            "capabilities": ["list_candidates"],
+            "method": "list_identity_candidates",
+            "privacy": "admin_labels_only",
+            "exposes_raw_account_ids": False,
+            "grants_permission": False,
+        }
+
+    def _identity_candidate_rows(self) -> list[dict[str, object]]:
+        """Project the internal registry without using the identities Page API."""
+        persons = self.identity_registry.snapshot()
+        return identity_candidate_rows(persons.values())
+
+    async def list_identity_candidates(self) -> dict[str, object]:
+        """Return a fail-closed, read-only directory of administrator labels."""
+        try:
+            async with self._identity_write_lock:
+                candidates = validate_identity_candidates(
+                    self._identity_candidate_rows()
+                )
+        except Exception as exc:
+            self.logger.warning(
+                "[relationship] identity candidates unavailable: %s",
+                type(exc).__name__,
+            )
+            candidates = []
+        return {
+            "contract_version": IDENTITY_CANDIDATES_CONTRACT_VERSION,
+            "status": "ok",
+            "candidates": candidates,
         }
 
     async def resolve_continuity_identity(

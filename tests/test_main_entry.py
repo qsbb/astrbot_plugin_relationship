@@ -242,6 +242,7 @@ class MainEntryTest(unittest.TestCase):
         self.assertIn(f"/{main.PLUGIN_NAME}/identity-merge", routes)
         self.assertIn(f"/{main.PLUGIN_NAME}/identity-delete", routes)
         self.assertIn(f"/{main.PLUGIN_NAME}/relationship-delete", routes)
+        self.assertNotIn(f"/{main.PLUGIN_NAME}/identity-candidates", routes)
 
     def test_relationship_snapshot_contract_is_versioned_and_privacy_limited(self):
         contract = self.plugin.relationship_snapshot_contract()
@@ -272,6 +273,188 @@ class MainEntryTest(unittest.TestCase):
         self.assertNotIn("trust", snapshot)
         self.assertNotIn("familiarity", snapshot)
         self.assertEqual(snapshot["behavior"]["followup"], "allow")
+
+    def test_identity_candidates_contract_is_formal_and_permission_neutral(self):
+        self.assertEqual(
+            self.plugin.identity_candidates_contract(),
+            {
+                "name": "relationship.identity_candidates",
+                "version": "1.0",
+                "plugin": "astrbot_plugin_relationship",
+                "capabilities": ["list_candidates"],
+                "method": "list_identity_candidates",
+                "privacy": "admin_labels_only",
+                "exposes_raw_account_ids": False,
+                "grants_permission": False,
+            },
+        )
+
+    def test_identity_candidates_are_redacted_and_stably_sorted(self):
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "person-z",
+                "display_name": "  后创建  ",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "private-user-z",
+                        "bot_id": "private-bot-z",
+                        "session_id": "qq-main:FriendMessage:private-user-z",
+                        "memory_profile_id": "private-memory-z",
+                    },
+                    {
+                        "platform_id": "telegram-main",
+                        "user_id": "private-telegram-z",
+                    },
+                ],
+            }
+        )
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "person-a",
+                "display_name": "先排序",
+                "accounts": [
+                    {
+                        "platform_id": "discord-main",
+                        "user_id": "private-user-a",
+                        "bot_id": "private-bot-a",
+                        "session_id": "discord-main:DirectMessage:private-user-a",
+                    }
+                ],
+            }
+        )
+
+        response = _run(self.plugin.list_identity_candidates())
+
+        self.assertEqual(set(response), {"contract_version", "status", "candidates"})
+        self.assertEqual(response["contract_version"], "1.0")
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(
+            response["candidates"],
+            [
+                {
+                    "person_id": "person-a",
+                    "display_name": "先排序",
+                    "account_count": 1,
+                },
+                {
+                    "person_id": "person-z",
+                    "display_name": "后创建",
+                    "account_count": 2,
+                },
+            ],
+        )
+        self.assertTrue(
+            all(
+                set(candidate) == {"person_id", "display_name", "account_count"}
+                for candidate in response["candidates"]
+            )
+        )
+        serialized = json.dumps(response, ensure_ascii=False)
+        for private_value in (
+            "qq-main",
+            "telegram-main",
+            "discord-main",
+            "private-user-z",
+            "private-bot-z",
+            "FriendMessage",
+            "private-memory-z",
+        ):
+            self.assertNotIn(private_value, serialized)
+
+    def test_identity_candidates_empty_registry_is_ok(self):
+        self.assertEqual(
+            _run(self.plugin.list_identity_candidates()),
+            {"contract_version": "1.0", "status": "ok", "candidates": []},
+        )
+
+    def test_identity_candidates_are_sorted_then_limited_to_1000(self):
+        rows = [
+            {
+                "person_id": f"person-{index:04d}",
+                "display_name": f"候选 {index}",
+                "account_count": index % 21,
+            }
+            for index in reversed(range(1005))
+        ]
+        self.plugin._identity_candidate_rows = lambda: rows
+
+        response = _run(self.plugin.list_identity_candidates())
+
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(len(response["candidates"]), 1000)
+        self.assertEqual(response["candidates"][0]["person_id"], "person-0000")
+        self.assertEqual(response["candidates"][-1]["person_id"], "person-0999")
+
+    def test_identity_candidates_reject_invalid_rows_as_one_batch(self):
+        valid = {
+            "person_id": "person-a",
+            "display_name": "自然人",
+            "account_count": 1,
+        }
+        invalid_rows = (
+            {**valid, "person_id": "bad person"},
+            {**valid, "display_name": "   "},
+            {**valid, "display_name": "名" * 81},
+            {**valid, "account_count": "1"},
+            {**valid, "account_count": 1.0},
+            {**valid, "account_count": True},
+            {**valid, "account_count": -1},
+            {**valid, "account_count": 21},
+        )
+        for invalid in invalid_rows:
+            with self.subTest(invalid=invalid):
+                self.plugin._identity_candidate_rows = lambda invalid=invalid: [
+                    valid,
+                    invalid,
+                ]
+                response = _run(self.plugin.list_identity_candidates())
+                self.assertEqual(response["status"], "ok")
+                self.assertEqual(response["candidates"], [])
+
+    def test_identity_candidates_reject_every_forbidden_extra_field(self):
+        forbidden_fields = (
+            "platform_id",
+            "user_id",
+            "bot_id",
+            "session_id",
+            "UMO",
+            "memory_profile_id",
+            "relationship_profile_id",
+            "whitelist",
+            "initial_prior",
+            "relationship_score",
+            "mood",
+            "willingness",
+            "api_key",
+            "token",
+            "private_path",
+        )
+        for field in forbidden_fields:
+            with self.subTest(field=field):
+                self.plugin._identity_candidate_rows = lambda field=field: [
+                    {
+                        "person_id": "person-a",
+                        "display_name": "自然人",
+                        "account_count": 1,
+                        field: "must-not-leak",
+                    }
+                ]
+                response = _run(self.plugin.list_identity_candidates())
+                self.assertEqual(response["status"], "ok")
+                self.assertEqual(response["candidates"], [])
+                self.assertNotIn("must-not-leak", json.dumps(response))
+
+    def test_identity_candidates_source_failure_is_ok_and_empty(self):
+        def broken_source():
+            raise ValueError("private path or payload must not escape")
+
+        self.plugin._identity_candidate_rows = broken_source
+
+        self.assertEqual(
+            _run(self.plugin.list_identity_candidates()),
+            {"contract_version": "1.0", "status": "ok", "candidates": []},
+        )
 
     def test_delivery_identity_requires_exact_bound_private_session(self) -> None:
         contract = self.plugin.delivery_identity_contract()

@@ -104,6 +104,15 @@ snapshot = await plugin.get_relationship_snapshot(
 熟悉度原始分数。兼容的言插件会优先从 `ningxin.request_context` 1.0 读取同轮快照，
 并把情登记的关系表达片段与序、知的片段稳定排序和去重；未安装言时情仍直接注入表达约束。
 
+需要让其他插件只读列出管理员已经登记的自然人候选时，使用独立的脱敏目录契约：
+
+```python
+contract = plugin.identity_candidates_contract()
+result = await plugin.list_identity_candidates()
+```
+
+契约名为 `relationship.identity_candidates`、版本为 `1.0`。`candidates` 最多返回 1000 项，按 `person_id` 稳定排序；每项严格只有 `person_id`、去除首尾空格的 `display_name` 和 `account_count`。它不复用 identities Page，不返回平台、UID、Bot ID、UMO、会话、记忆人格、关系人格、白名单、初始关系、关系分数或情绪，也不接受调用方提交 `person_id` 创建或修改自然人。该目录只提供管理员标签候选，不授予主人、白名单、身份认证、投递或其他权限；数据不存在、损坏或任一候选不符合契约时失败关闭为 `status=ok` 与空列表。
+
 需要向一个已绑定自然人的明确私聊会话交付内容时，可使用严格的身份校验契约：
 
 ```python
@@ -246,7 +255,7 @@ await manager.reset(RelationshipScope(bot_id, user_id, group_id))
 python -m pytest -q
 ```
 
-覆盖情绪迁移回归、短期态度半衰、事件强度与平滑可塑性、每日好感上限、初始关系幂等、Persona/自然人/账号作用域隔离、账号与身份显式合并、解除归属后的单账号承接、账号 UID 归属后的白名单连续性、白名单资格迁移、冲突预检、失败回滚与中断恢复、未决事务写屏障、逐人格关系删除、跨平台记忆身份复核、持久化读写与 v4 迁移、提示词安全约束。
+覆盖情绪迁移回归、短期态度半衰、事件强度与平滑可塑性、每日好感上限、初始关系幂等、Persona/自然人/账号作用域隔离、账号与身份显式合并、解除归属后的单账号承接、账号 UID 归属后的白名单连续性、白名单资格迁移、只读身份候选脱敏与失败关闭、冲突预检、失败回滚与中断恢复、未决事务写屏障、逐人格关系删除、跨平台记忆身份复核、持久化读写与 v4 迁移、提示词安全约束。
 
 ## 目录
 
@@ -266,6 +275,7 @@ astrbot_plugin_relationship/
 │   ├── dynamics.py
 │   ├── decay.py
 │   ├── repository.py
+│   ├── identity_candidates.py
 │   ├── identity_registry.py
 │   ├── profiles.py
 │   ├── policy.py
