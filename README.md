@@ -288,3 +288,9 @@ astrbot_plugin_relationship/
 
 任何可观察功能、配置项或安全边界的增删改，必须在同一批变更中同步 README、CHANGELOG 的
 `Unreleased`、配置 schema 与回归测试。版本号在实现、文档和验证完成后由发布者确认。
+
+## 言的关系冒犯事件
+
+当“言”开启 relationship_offense_detection_enabled 后，它只在主模型已经生成回复时识别严格格式的内部候选标记，并调用 relationship.event@1.0 提交 kind=offense、source=direct 的脱敏事件。情只校验 bot/user/platform/person 作用域、事件编号、置信度和严重度，并按现有关系规则记账；不会保存原始聊天正文。
+
+该链路默认关闭。标记格式不完整、置信度不足、当前平台账号无法唯一确认、契约缺失或提交失败时，情拒绝写入，言仍按原流程回复；内部标记会在结果装饰阶段移除，避免出现在文本或语音中。
