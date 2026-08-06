@@ -44,6 +44,11 @@ from .models import (
 )
 from .mood import MoodDecision, MoodTracker
 from .policy import PolicyConfig, build_snapshot
+from .short_term_affinity import (
+    AffinityTrendDecision,
+    ShortTermAffinityConfig,
+    ShortTermAffinityTracker,
+)
 from .profiles import parse_state_key, validate_profile_id
 from .repository import MemoryRepository, RelationshipRepository
 from .trust import TrustCalculator, TrustConfig
@@ -75,6 +80,8 @@ class RelationshipStateManager:
         policy_config: PolicyConfig | None = None,
         affect_tracker: ShortTermAffectTracker | None = None,
         affect_config: AffectConfig | None = None,
+        affinity_trend_tracker: ShortTermAffinityTracker | None = None,
+        affinity_trend_config: ShortTermAffinityConfig | None = None,
         dynamics_config: DynamicsConfig | None = None,
         clock: Callable[[], float] | None = None,
         save_interval_seconds: float = 30.0,
@@ -90,6 +97,9 @@ class RelationshipStateManager:
         self._decay_config = decay_config or DecayConfig()
         self._policy_config = policy_config or PolicyConfig()
         self._affect = affect_tracker or ShortTermAffectTracker(affect_config)
+        self._affinity_trend = affinity_trend_tracker or ShortTermAffinityTracker(
+            affinity_trend_config
+        )
         self._dynamics_config = dynamics_config or DynamicsConfig()
         self._clock = clock or time.time
         self._save_interval = max(0.0, float(save_interval_seconds))
@@ -147,7 +157,10 @@ class RelationshipStateManager:
             if normalized_event.is_command:
                 return self._snapshot(scope, business_now, decision=decision)
             apply_decay(state, business_now, self._decay_config)
-            self._apply_deltas(normalized_event, state, business_now)
+            applied_affinity = self._apply_deltas(normalized_event, state, business_now)
+            affinity_trend = self._affinity_trend.record(
+                scope.user_key, applied_affinity, now=business_now
+            )
             state.last_event_at = max(state.last_event_at, business_now)
             state.interaction_count += 1
             self._dirty = True
@@ -157,6 +170,7 @@ class RelationshipStateManager:
                 state,
                 self._policy_config,
                 affect,
+                affinity_trend,
             )
             if self._logger is not None:
                 self._logger.debug(
@@ -206,6 +220,7 @@ class RelationshipStateManager:
             self._mood.reset(scope.session_key)
             self._mood.reset(scope.pressure_key)
             self._affect.reset(scope.pressure_key)
+            self._affinity_trend.reset(scope.user_key)
             previous = self._states.pop(scope.user_key, None)
             for alias_key in scope.state_alias_keys:
                 self._states.pop(alias_key, None)
@@ -680,6 +695,7 @@ class RelationshipStateManager:
         decay_config: DecayConfig | None = None,
         policy_config: PolicyConfig | None = None,
         affect_config: AffectConfig | None = None,
+        affinity_trend_config: ShortTermAffinityConfig | None = None,
         dynamics_config: DynamicsConfig | None = None,
         save_interval_seconds: float | None = None,
     ) -> None:
@@ -700,6 +716,8 @@ class RelationshipStateManager:
             self._policy_config = policy_config
         if affect_config is not None:
             self._affect.update_config(affect_config)
+        if affinity_trend_config is not None:
+            self._affinity_trend.update_config(affinity_trend_config)
         if dynamics_config is not None:
             self._dynamics_config = dynamics_config
         if save_interval_seconds is not None:
@@ -710,8 +728,10 @@ class RelationshipStateManager:
             self._save()
 
     def _cleanup_stale_sessions(self, ttl_seconds: float | None = None) -> int:
-        return self._mood.cleanup_stale(ttl_seconds) + self._affect.cleanup_stale(
-            ttl_seconds
+        return (
+            self._mood.cleanup_stale(ttl_seconds)
+            + self._affect.cleanup_stale(ttl_seconds)
+            + self._affinity_trend.cleanup_stale(ttl_seconds)
         )
 
     def _snapshot(
@@ -720,6 +740,7 @@ class RelationshipStateManager:
         now: float,
         decision: MoodDecision | None = None,
         affect: AffectDecision | None = None,
+        affinity_trend: AffinityTrendDecision | None = None,
     ) -> RelationshipSnapshot:
         decision = decision or self._combined_peek(scope, now)
         state = self._states.get(scope.user_key)
@@ -733,6 +754,7 @@ class RelationshipStateManager:
             state,
             self._policy_config,
             affect or self._affect.peek(scope.pressure_key, now=now),
+            affinity_trend or self._affinity_trend.peek(scope.user_key, now=now),
         )
 
     def _record_mood(
@@ -1075,7 +1097,7 @@ class RelationshipStateManager:
 
     def _apply_deltas(
         self, event: InteractionEvent, state: UserRelationState, now: float
-    ) -> None:
+    ) -> float:
         affinity_delta = self._affinity.compute(event, state)
         trust_delta = self._trust.compute(event, state)
         familiarity_delta = self._familiarity.compute(event, state)
@@ -1093,6 +1115,7 @@ class RelationshipStateManager:
             state.daily_affinity_positive_used = 0.0
             state.daily_affinity_negative_used = 0.0
         want = affinity_delta.affinity * weight
+        applied = 0.0
         if want > 0.0:
             want = self._limit_weighted_affinity(event, state, want)
         if want:
@@ -1133,6 +1156,7 @@ class RelationshipStateManager:
         state.extra[EVIDENCE_MASS_KEY] = accumulate_evidence_mass(
             evidence_mass, event
         )
+        return applied
 
     def _limit_weighted_affinity(
         self, event: InteractionEvent, state: UserRelationState, value: float

@@ -11,6 +11,12 @@ from .affect import (
 )
 from .mood import MOOD_ANNOYED, MOOD_LAZY, MoodDecision
 from .models import BehaviorAdvice, RelationshipSnapshot, UserRelationState, clamp_score
+from .short_term_affinity import (
+    TREND_COOLING,
+    TREND_SETTLING,
+    TREND_WARMING,
+    AffinityTrendDecision,
+)
 
 _HIGH = 70
 _LOW = 30
@@ -55,6 +61,11 @@ _AFFECT_FRAGMENTS = {
     STANCE_GUARDED: "本轮语气应更克制有分寸，但不要敌意、惩罚或翻旧账。",
     STANCE_WARM: "本轮语气可显得更温和、亲近和上心，但不要越界或擅自承诺。",
 }
+_TREND_FRAGMENTS = {
+    TREND_WARMING: "最近的互动让关系自然升温；回复可以更上心、更主动承接，但不要夸张示好或越过边界。",
+    TREND_COOLING: "最近的互动让关系暂时降温；回复应更谨慎、克制并保留分寸，但不能冷暴力、讽刺或惩罚对方。",
+    TREND_SETTLING: "前面出现过明显的关系波动，正在恢复平稳；回复自然一点，不要把上一轮情绪继续放大。",
+}
 
 
 def build_snapshot(
@@ -62,6 +73,7 @@ def build_snapshot(
     state: UserRelationState,
     config: PolicyConfig | None = None,
     affect: AffectDecision | None = None,
+    affinity_trend: AffinityTrendDecision | None = None,
 ) -> RelationshipSnapshot:
     """构造数据快照；所有行为字段仅为建议，不产生任何执行效果。"""
     cfg = config or PolicyConfig()
@@ -77,6 +89,7 @@ def build_snapshot(
     familiarity_tier = _familiarity_tier(familiarity)
     affinity_tier = _affinity_tier(affinity)
     affect = affect or AffectDecision()
+    affinity_trend = affinity_trend or AffinityTrendDecision()
 
     tone = "natural"
     length = "normal"
@@ -88,8 +101,16 @@ def build_snapshot(
             tone, initiative = "polite_reserved", "low"
         if affect.stance == STANCE_GUARDED:
             tone = "polite_reserved"
+            if affinity_trend.style == TREND_COOLING:
+                tone, initiative = "cool_polite", "low"
         elif affect.stance == STANCE_WARM:
             tone = "warm_attentive"
+            if affinity_trend.style == TREND_WARMING:
+                initiative = "high"
+        elif affinity_trend.style == TREND_WARMING:
+            tone, initiative = "warm_attentive", "high"
+        elif affinity_trend.style == TREND_COOLING:
+            tone, initiative = "cool_polite", "low"
         if decision.mood == MOOD_ANNOYED:
             tone, length, initiative = "cool_polite", "minimal", "low"
         elif decision.mood == MOOD_LAZY:
@@ -104,6 +125,9 @@ def build_snapshot(
             affect_fragment = _AFFECT_FRAGMENTS.get(affect.stance)
             if affect_fragment:
                 fragments.append(affect_fragment)
+            trend_fragment = _TREND_FRAGMENTS.get(affinity_trend.style)
+            if trend_fragment:
+                fragments.append(trend_fragment)
         fragments.append(_FAMILIARITY_FRAGMENTS[familiarity_tier])
         affinity_fragment = _AFFINITY_FRAGMENTS.get(affinity_tier)
         if affinity_fragment:

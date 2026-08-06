@@ -56,6 +56,7 @@ from .core.config import (
     relationship_legacy_profile_id,
     relationship_persona_profile_map,
     save_interval_seconds,
+    short_term_affinity_config,
     trust_config,
 )
 from .core.familiarity import FamiliarityCalculator
@@ -105,7 +106,7 @@ from .series_diagnostics import (
 )
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.8.1"
+__version__ = "0.8.2"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -193,6 +194,7 @@ class RelationshipPlugin(Star):
             decay_config=decay_config(merged),
             policy_config=policy_config(merged),
             affect_config=affect_config(merged),
+            affinity_trend_config=short_term_affinity_config(merged),
             dynamics_config=dynamics_config(merged),
             save_interval_seconds=save_interval_seconds(merged),
             mood_enabled=mood_enabled(merged),
@@ -2519,6 +2521,7 @@ class RelationshipPlugin(Star):
             decay_config=decay_config(merged),
             policy_config=policy_config(merged),
             affect_config=affect_config(merged),
+            affinity_trend_config=short_term_affinity_config(merged),
             dynamics_config=dynamics_config(merged),
             save_interval_seconds=save_interval_seconds(merged),
         )

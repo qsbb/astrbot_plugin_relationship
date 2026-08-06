@@ -99,6 +99,44 @@
     "minimum": 0,
     "maximum": 100
   },
+  "SHORT_TERM_AFFINITY_ENABLED": {
+    "type": "bool",
+    "description": "日内好感趋势",
+    "hint": "开启后，只根据已经实际应用的好感变化判断最近是在升温、降温还是恢复平稳；只影响近期说话风格，不改变长期好感、权限或静默决定。",
+    "default": true
+  },
+  "SHORT_TERM_AFFINITY_HALF_LIFE_SECONDS": {
+    "type": "float",
+    "description": "日内趋势半衰期（秒）",
+    "hint": "经过这么长时间，最近好感变化对说话风格的影响大约减半。默认 4 小时，适合让同一天的情绪有惯性但不会记一整天。",
+    "default": 14400,
+    "minimum": 300,
+    "maximum": 604800
+  },
+  "SHORT_TERM_AFFINITY_DAILY_THRESHOLD": {
+    "type": "float",
+    "description": "日内净变化阈值",
+    "hint": "当天累计实际好感变化达到这个值，才可能形成明显的升温或降温趋势；数值越大，越不容易被偶发事件触发。",
+    "default": 2.5,
+    "minimum": 0.1,
+    "maximum": 100
+  },
+  "SHORT_TERM_AFFINITY_MOMENTUM_THRESHOLD": {
+    "type": "float",
+    "description": "近期变化速度阈值",
+    "hint": "除了当天累计变化，还要看最近几小时的变化速度。这样慢慢累积不会突然改变语气，连续事件才会明显生效。",
+    "default": 1.5,
+    "minimum": 0.1,
+    "maximum": 100
+  },
+  "SHORT_TERM_AFFINITY_HOLD_SECONDS": {
+    "type": "float",
+    "description": "恢复期保留时间（秒）",
+    "hint": "升温或降温减弱后，在这段时间内保持自然的恢复期语气；过期后回到普通风格。",
+    "default": 7200,
+    "minimum": 0,
+    "maximum": 604800
+  },
   "DYNAMICS_EARLY_BOOST": {
     "type": "float",
     "description": "新关系额外增幅",

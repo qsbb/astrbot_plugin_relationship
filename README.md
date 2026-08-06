@@ -295,3 +295,23 @@ astrbot_plugin_relationship/
 当“言”开启 relationship_offense_detection_enabled 后，它只在主模型已经生成回复时识别严格格式的内部候选标记，并调用 relationship.event@1.0 提交 kind=offense、source=direct 的脱敏事件。情只校验 bot/user/platform/person 作用域、事件编号、置信度和严重度，并按现有关系规则记账；不会保存原始聊天正文。
 
 该链路默认关闭。标记格式不完整、置信度不足、当前平台账号无法唯一确认、契约缺失或提交失败时，情拒绝写入，言仍按原流程回复；内部标记会在结果装饰阶段移除，避免出现在文本或语音中。
+
+
+## 日内好感趋势
+
+`core/short_term_affinity.py` 用来模拟人在一天内对最近关系事件的情绪惯性：
+
+- 只记录已经实际应用的好感增量，不会改写长期 `affinity_score`，也不写入关系文件。
+- 使用“当天净变化 + 近期指数衰减”两个条件：慢慢累积不会突然改变语气，同一时段连续升高或降低才会进入 `warming_up` / `cooling_down`。
+- 趋势只影响语气、上心程度和承接意愿，不影响权限、主人判定、安全边界、静默执行或长期分数。
+- 趋势按 `relationship_profile_id + person_id` 或未绑定时的账号键隔离；已绑定的同一自然人可在不同平台延续当天趋势。
+- 跨自然日会清空日内积累；趋势保存在内存，重启后不会假装还记得当天情绪。
+
+这个设计是对研究结论的工程化近似，不是心理诊断：情绪惯性说明近期状态对后续状态的影响会随时间恢复；情绪调节模型支持使用事件后的恢复过程；评价理论强调情景和个体对事件意义的判断。参考：
+
+- [Emotional Inertia and Psychological Maladjustment](https://doi.org/10.1177/0956797610372634)
+- [Feelings change: Accounting for individual differences in the temporal dynamics of affect](https://doi.org/10.1037/a0020962)
+- [Emotion Regulation: Current Status and Future Prospects](https://doi.org/10.1080/1047840X.2014.940781)
+- [Appraisal Theories of Emotion: State of the Art and Future Development](https://doi.org/10.1177/1754073912468165)
+
+设置项在管理页的“设置”区，以 `SHORT_TERM_AFFINITY_*` 开头。默认半衰期为 4 小时，日内净变化阈值为 2.5，近期动量阈值为 1.5，恢复期保留 2 小时。

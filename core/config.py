@@ -21,6 +21,7 @@ from .profiles import (
     parse_profile_mapping,
 )
 from .prompts import PromptConfig
+from .short_term_affinity import ShortTermAffinityConfig
 from .trust import TrustConfig
 
 DEFAULTS: dict[str, Any] = {
@@ -39,6 +40,11 @@ DEFAULTS: dict[str, Any] = {
     "AFFECT_POSITIVE_GAIN": 24,
     "AFFECT_NEGATIVE_GAIN": 32,
     "AFFECT_STANCE_THRESHOLD": 15,
+    "SHORT_TERM_AFFINITY_ENABLED": True,
+    "SHORT_TERM_AFFINITY_HALF_LIFE_SECONDS": 14400,
+    "SHORT_TERM_AFFINITY_DAILY_THRESHOLD": 2.5,
+    "SHORT_TERM_AFFINITY_MOMENTUM_THRESHOLD": 1.5,
+    "SHORT_TERM_AFFINITY_HOLD_SECONDS": 7200,
     "DYNAMICS_EARLY_BOOST": 0.25,
     "DYNAMICS_EVIDENCE_HALF_LIFE": 12,
     "RELATIONSHIP_DEFAULT_PROFILE_ID": DEFAULT_PROFILE_ID,
@@ -169,6 +175,36 @@ def affect_config(raw: Mapping[str, Any]) -> AffectConfig:
         ),
         stance_threshold=_get_float(
             raw, "AFFECT_STANCE_THRESHOLD", minimum=0.0, maximum=100.0
+        ),
+    )
+
+
+def short_term_affinity_config(raw: Mapping[str, Any]) -> ShortTermAffinityConfig:
+    return ShortTermAffinityConfig(
+        enabled=_get_bool(raw, "SHORT_TERM_AFFINITY_ENABLED"),
+        half_life_seconds=_get_float(
+            raw,
+            "SHORT_TERM_AFFINITY_HALF_LIFE_SECONDS",
+            minimum=300.0,
+            maximum=604800.0,
+        ),
+        daily_threshold=_get_float(
+            raw,
+            "SHORT_TERM_AFFINITY_DAILY_THRESHOLD",
+            minimum=0.1,
+            maximum=100.0,
+        ),
+        momentum_threshold=_get_float(
+            raw,
+            "SHORT_TERM_AFFINITY_MOMENTUM_THRESHOLD",
+            minimum=0.1,
+            maximum=100.0,
+        ),
+        hold_seconds=_get_float(
+            raw,
+            "SHORT_TERM_AFFINITY_HOLD_SECONDS",
+            minimum=0.0,
+            maximum=604800.0,
         ),
     )
 
