@@ -113,6 +113,18 @@ result = await plugin.list_identity_candidates()
 
 契约名为 `relationship.identity_candidates`、版本为 `1.0`。`candidates` 最多返回 1000 项，按 `person_id` 稳定排序；每项严格只有 `person_id`、去除首尾空格的 `display_name` 和 `account_count`。它不复用 identities Page，不返回平台、UID、Bot ID、UMO、会话、记忆人格、关系人格、白名单、初始关系、关系分数或情绪，也不接受调用方提交 `person_id` 创建或修改自然人。该目录只提供管理员标签候选，不授予主人、白名单、身份认证、投递或其他权限；数据不存在、损坏或任一候选不符合契约时失败关闭为 `status=ok` 与空列表。
 
+需要让“临”等服务端插件用已选择自然人构造正式 AstrBot 私聊事件时，使用独立的服务端身份契约：
+
+```python
+contract = plugin.quest_event_identity_contract()
+result = await plugin.resolve_quest_event_identity(
+    person_id="summer",
+    platform_candidates=["onebot-main"],
+)
+```
+
+契约名为 `relationship.quest_event_identity`、版本为 `1.0`。只有账号属于调用方提供的活跃平台集合，且 Platform ID、Bot ID、User ID 和私聊 UMO 完整、相互一致并唯一时才返回。它不注册 Page 或 Web API，明确禁止浏览器暴露，也不授予 owner、白名单、消息发送或平台操作权限；消费方仍须使用自己的已认证 principal 通过“序”或本地严格授权。群聊 UMO、缺字段、多账号歧义、平台不匹配、身份事务未完成和非法请求都失败关闭，禁止读取私有 registry 兜底。
+
 需要向一个已绑定自然人的明确私聊会话交付内容时，可使用严格的身份校验契约：
 
 ```python

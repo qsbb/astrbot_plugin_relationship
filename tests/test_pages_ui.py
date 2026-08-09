@@ -190,8 +190,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("只有白名单关系可以调整", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.8.2-1", self.html)
-        self.assertIn("app.js?v=0.8.2-1", self.html)
+        self.assertIn("style.css?v=0.8.3-1", self.html)
+        self.assertIn("app.js?v=0.8.3-1", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)

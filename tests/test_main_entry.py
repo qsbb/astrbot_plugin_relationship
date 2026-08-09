@@ -200,9 +200,18 @@ class FakeContext:
 
     def __init__(self) -> None:
         self.web_api_calls: list[tuple] = []
+        self.active_platform_ids = {
+            "onebot-main",
+            "qq-main",
+            "telegram-main",
+            "discord-main",
+        }
 
     def register_web_api(self, route, handler, methods, description) -> None:
         self.web_api_calls.append((route, handler, methods, description))
+
+    def get_platform_inst(self, platform_id: str):
+        return object() if platform_id in self.active_platform_ids else None
 
 
 def _run(coro):
@@ -243,6 +252,7 @@ class MainEntryTest(unittest.TestCase):
         self.assertIn(f"/{main.PLUGIN_NAME}/identity-delete", routes)
         self.assertIn(f"/{main.PLUGIN_NAME}/relationship-delete", routes)
         self.assertNotIn(f"/{main.PLUGIN_NAME}/identity-candidates", routes)
+        self.assertNotIn(f"/{main.PLUGIN_NAME}/quest-event-identity", routes)
 
     def test_relationship_snapshot_contract_is_versioned_and_privacy_limited(self):
         contract = self.plugin.relationship_snapshot_contract()
@@ -288,6 +298,181 @@ class MainEntryTest(unittest.TestCase):
                 "grants_permission": False,
             },
         )
+
+    def test_quest_event_identity_contract_is_server_only_and_permission_neutral(self):
+        self.assertEqual(
+            self.plugin.quest_event_identity_contract(),
+            {
+                "name": "relationship.quest_event_identity",
+                "version": "1.0",
+                "plugin": "astrbot_plugin_relationship",
+                "capabilities": ("resolve_private_event_identity",),
+                "method": "resolve_quest_event_identity",
+                "privacy": "server_only_raw_account",
+                "browser_exposed": False,
+                "exposes_raw_account_ids": True,
+                "grants_permission": False,
+                "active_platform_match_required": True,
+                "private_session_required": True,
+            },
+        )
+
+    def test_quest_event_identity_resolves_only_unique_active_private_account(self):
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "person-quest",
+                "display_name": "Quest 用户",
+                "accounts": [
+                    {
+                        "platform_id": "onebot-main",
+                        "user_id": "private-user",
+                        "bot_id": "private-bot",
+                        "session_id": "onebot-main:FriendMessage:private-user",
+                    },
+                    {
+                        "platform_id": "inactive-platform",
+                        "user_id": "inactive-user",
+                        "bot_id": "inactive-bot",
+                        "session_id": "inactive-platform:FriendMessage:inactive-user",
+                    },
+                ],
+            }
+        )
+
+        response = _run(
+            self.plugin.resolve_quest_event_identity(
+                "person-quest", ["onebot-main"]
+            )
+        )
+
+        self.assertEqual(
+            response,
+            {
+                "contract_version": "1.0",
+                "status": "ok",
+                "reason": "resolved_unique_active_private_account",
+                "identity": {
+                    "platform_id": "onebot-main",
+                    "bot_id": "private-bot",
+                    "user_id": "private-user",
+                    "session_id": "onebot-main:FriendMessage:private-user",
+                },
+            },
+        )
+
+    def test_quest_event_identity_fails_closed_for_ambiguous_or_non_private_accounts(self):
+        cases = (
+            (
+                "person-ambiguous",
+                [
+                    {
+                        "platform_id": "onebot-main",
+                        "user_id": "user-a",
+                        "bot_id": "bot-a",
+                        "session_id": "onebot-main:FriendMessage:user-a",
+                    },
+                    {
+                        "platform_id": "onebot-main",
+                        "user_id": "user-b",
+                        "bot_id": "bot-b",
+                        "session_id": "onebot-main:PrivateMessage:user-b",
+                    },
+                ],
+                "private_account_ambiguous",
+            ),
+            (
+                "person-group",
+                [
+                    {
+                        "platform_id": "onebot-main",
+                        "user_id": "group-user",
+                        "bot_id": "group-bot",
+                        "session_id": "onebot-main:GroupMessage:group-a",
+                    }
+                ],
+                "private_account_not_found",
+            ),
+            (
+                "person-incomplete",
+                [
+                    {
+                        "platform_id": "onebot-main",
+                        "user_id": "incomplete-user",
+                        "bot_id": "",
+                        "session_id": "onebot-main:FriendMessage:incomplete-user",
+                    }
+                ],
+                "private_account_not_found",
+            ),
+        )
+        for person_id, accounts, reason in cases:
+            with self.subTest(reason=reason):
+                self.plugin.identity_registry.upsert(
+                    {
+                        "person_id": person_id,
+                        "display_name": person_id,
+                        "accounts": accounts,
+                    }
+                )
+                response = _run(
+                    self.plugin.resolve_quest_event_identity(
+                        person_id, ["onebot-main"]
+                    )
+                )
+                self.assertEqual(response["status"], "unavailable")
+                self.assertEqual(response["reason"], reason)
+                self.assertIsNone(response["identity"])
+
+    def test_quest_event_identity_rejects_missing_person_and_invalid_platform_scope(self):
+        missing = _run(
+            self.plugin.resolve_quest_event_identity("missing", ["onebot-main"])
+        )
+        self.assertEqual(missing["reason"], "person_not_found")
+        invalid = _run(
+            self.plugin.resolve_quest_event_identity("missing", ["bad:platform"])
+        )
+        self.assertEqual(invalid["reason"], "invalid_request")
+        empty = _run(
+            self.plugin.resolve_quest_event_identity("missing", [])
+        )
+        self.assertEqual(empty["reason"], "active_platform_required")
+        inactive = _run(
+            self.plugin.resolve_quest_event_identity("missing", ["offline-platform"])
+        )
+        self.assertEqual(inactive["reason"], "active_platform_not_available")
+
+    def test_quest_event_identity_rejects_unsafe_raw_fields_and_pending_transaction(self):
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "person-unsafe",
+                "display_name": "非法账号",
+                "accounts": [
+                    {
+                        "platform_id": "onebot-main",
+                        "user_id": "unsafe|user",
+                        "bot_id": "private-bot",
+                        "session_id": "onebot-main:FriendMessage:unsafe|user",
+                    }
+                ],
+            }
+        )
+        unsafe = _run(
+            self.plugin.resolve_quest_event_identity(
+                "person-unsafe", ["onebot-main"]
+            )
+        )
+        self.assertEqual(unsafe["reason"], "private_account_not_found")
+        original = self.plugin._identity_transaction_pending
+        self.plugin._identity_transaction_pending = lambda: True
+        try:
+            pending = _run(
+                self.plugin.resolve_quest_event_identity(
+                    "person-unsafe", ["onebot-main"]
+                )
+            )
+        finally:
+            self.plugin._identity_transaction_pending = original
+        self.assertEqual(pending["reason"], "identity_transaction_pending")
 
     def test_identity_candidates_are_redacted_and_stably_sorted(self):
         self.plugin.identity_registry.upsert(

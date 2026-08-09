@@ -106,7 +106,7 @@ from .series_diagnostics import (
 )
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.8.2"
+__version__ = "0.8.3"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -124,6 +124,8 @@ CONTINUITY_IDENTITY_CONTRACT_NAME = "relationship.continuity_identity"
 CONTINUITY_IDENTITY_CONTRACT_VERSION = "1.0"
 IDENTITY_CANDIDATES_CONTRACT_NAME = "relationship.identity_candidates"
 IDENTITY_CANDIDATES_CONTRACT_VERSION = "1.0"
+QUEST_EVENT_IDENTITY_CONTRACT_NAME = "relationship.quest_event_identity"
+QUEST_EVENT_IDENTITY_CONTRACT_VERSION = "1.0"
 _PRIVATE_UMO_MESSAGE_TYPES = frozenset(
     {"friendmessage", "privatemessage", "directmessage"}
 )
@@ -320,6 +322,22 @@ class RelationshipPlugin(Star):
             "grants_permission": False,
         }
 
+    def quest_event_identity_contract(self) -> dict[str, object]:
+        """Declare server-only resolution of one verified private account."""
+        return {
+            "name": QUEST_EVENT_IDENTITY_CONTRACT_NAME,
+            "version": QUEST_EVENT_IDENTITY_CONTRACT_VERSION,
+            "plugin": PLUGIN_NAME,
+            "capabilities": ("resolve_private_event_identity",),
+            "method": "resolve_quest_event_identity",
+            "privacy": "server_only_raw_account",
+            "browser_exposed": False,
+            "exposes_raw_account_ids": True,
+            "grants_permission": False,
+            "active_platform_match_required": True,
+            "private_session_required": True,
+        }
+
     def _identity_candidate_rows(self) -> list[dict[str, object]]:
         """Project the internal registry without using the identities Page API."""
         persons = self.identity_registry.snapshot()
@@ -342,6 +360,148 @@ class RelationshipPlugin(Star):
             "contract_version": IDENTITY_CANDIDATES_CONTRACT_VERSION,
             "status": "ok",
             "candidates": candidates,
+        }
+
+    async def resolve_quest_event_identity(
+        self,
+        person_id: str,
+        platform_candidates: tuple[str, ...] | list[str],
+    ) -> dict[str, object]:
+        """Resolve one complete private account without exposing it to a Page.
+
+        This contract supplies identity facts only. The consumer must still pass
+        its own authorization control plane before creating an AstrBot event.
+        """
+        person_id = str(person_id or "").strip()
+        platforms = self._quest_platform_candidates(platform_candidates)
+        if platforms is None:
+            return self._quest_event_identity_unavailable("invalid_request")
+        if not platforms:
+            return self._quest_event_identity_unavailable("active_platform_required")
+        platforms = self._active_quest_platforms(platforms)
+        if platforms is None:
+            return self._quest_event_identity_unavailable(
+                "active_platform_api_unavailable"
+            )
+        if not platforms:
+            return self._quest_event_identity_unavailable(
+                "active_platform_not_available"
+            )
+        if self.identity_registry.get(person_id) is None:
+            return self._quest_event_identity_unavailable("person_not_found")
+
+        async with self._identity_write_lock:
+            if self._identity_transaction_pending():
+                return self._quest_event_identity_unavailable(
+                    "identity_transaction_pending"
+                )
+            person = self.identity_registry.get(person_id)
+            if person is None:
+                return self._quest_event_identity_unavailable("person_not_found")
+            matches: dict[tuple[str, str, str, str], PlatformAccount] = {}
+            for account in person.accounts:
+                if account.platform_id.casefold() not in platforms:
+                    continue
+                if not self._quest_private_account_complete(account):
+                    continue
+                key = (
+                    account.platform_id.casefold(),
+                    account.bot_id,
+                    account.user_id,
+                    account.session_id,
+                )
+                matches.setdefault(key, account)
+
+        if not matches:
+            return self._quest_event_identity_unavailable(
+                "private_account_not_found"
+            )
+        if len(matches) != 1:
+            return self._quest_event_identity_unavailable(
+                "private_account_ambiguous"
+            )
+        account = next(iter(matches.values()))
+        return {
+            "contract_version": QUEST_EVENT_IDENTITY_CONTRACT_VERSION,
+            "status": "ok",
+            "reason": "resolved_unique_active_private_account",
+            "identity": {
+                "platform_id": account.platform_id,
+                "bot_id": account.bot_id,
+                "user_id": account.user_id,
+                "session_id": account.session_id,
+            },
+        }
+
+    @staticmethod
+    def _quest_platform_candidates(
+        values: tuple[str, ...] | list[str] | object,
+    ) -> dict[str, str] | None:
+        if not isinstance(values, (tuple, list)) or len(values) > 100:
+            return None
+        platforms: dict[str, str] = {}
+        for raw in values:
+            if not isinstance(raw, str):
+                return None
+            value = raw.strip()
+            if (
+                not value
+                or len(value) > 120
+                or ":" in value
+                or "|" in value
+                or any(char.isspace() or ord(char) < 33 for char in value)
+            ):
+                return None
+            platforms.setdefault(value.casefold(), value)
+        return platforms
+
+    def _active_quest_platforms(
+        self, requested: dict[str, str]
+    ) -> set[str] | None:
+        getter = getattr(self.context, "get_platform_inst", None)
+        if not callable(getter):
+            return None
+        active: set[str] = set()
+        for normalized, platform_id in requested.items():
+            try:
+                instance = getter(platform_id)
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                return None
+            if instance is not None:
+                active.add(normalized)
+        return active
+
+    @staticmethod
+    def _quest_private_account_complete(account: PlatformAccount) -> bool:
+        values = {
+            "platform_id": account.platform_id,
+            "bot_id": account.bot_id,
+            "user_id": account.user_id,
+            "session_id": account.session_id,
+        }
+        if any(
+            not value
+            or len(value) > (240 if key == "session_id" else 120)
+            or "|" in value
+            or any(char.isspace() or ord(char) < 33 for char in value)
+            for key, value in values.items()
+        ):
+            return False
+        parts = account.session_id.split(":", 2)
+        return bool(
+            len(parts) == 3
+            and parts[0].casefold() == account.platform_id.casefold()
+            and parts[1].casefold() in _PRIVATE_UMO_MESSAGE_TYPES
+            and parts[2] == account.user_id
+        )
+
+    @staticmethod
+    def _quest_event_identity_unavailable(reason: str) -> dict[str, object]:
+        return {
+            "contract_version": QUEST_EVENT_IDENTITY_CONTRACT_VERSION,
+            "status": "unavailable",
+            "reason": str(reason or "identity_unavailable"),
+            "identity": None,
         }
 
     async def resolve_continuity_identity(
