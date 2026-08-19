@@ -214,6 +214,7 @@ async function load() {
   const button = $("#btn-refresh");
   if (button) {
     button.disabled = true;
+    button.setAttribute("aria-busy", "true");
     button.textContent = "刷新中…";
   }
   try {
@@ -224,6 +225,7 @@ async function load() {
   } finally {
     if (button) {
       button.disabled = false;
+      button.setAttribute("aria-busy", "false");
       button.textContent = "刷新";
     }
   }
@@ -329,6 +331,7 @@ async function saveConfig() {
   const button = $("#btn-save-config");
   if (button) {
     button.disabled = true;
+    button.setAttribute("aria-busy", "true");
     button.textContent = "保存中…";
   }
   try {
@@ -352,6 +355,7 @@ async function saveConfig() {
   } finally {
     if (button) {
       button.disabled = false;
+      button.setAttribute("aria-busy", "false");
       button.textContent = "保存";
     }
   }
@@ -515,9 +519,12 @@ function activateTab(target) {
     const active = button.dataset.tab === target;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
   });
   document.querySelectorAll(".panel[data-panel]").forEach((panel) => {
-    panel.classList.toggle("active", panel.dataset.panel === target);
+    const active = panel.dataset.panel === target;
+    panel.classList.toggle("active", active);
+    panel.setAttribute("aria-hidden", String(!active));
   });
 }
 
@@ -687,6 +694,7 @@ async function saveIdentity() {
   const button = $("#btn-save-person");
   const originalLabel = button.textContent;
   button.disabled = true;
+  button.setAttribute("aria-busy", "true");
   button.textContent = "保存中…";
   try {
     const payload = collectIdentity();
@@ -713,6 +721,7 @@ async function saveIdentity() {
     button.textContent = originalLabel;
   } finally {
     button.disabled = false;
+    button.setAttribute("aria-busy", "false");
   }
 }
 
@@ -736,6 +745,7 @@ async function mergeIdentity() {
   clearTimeout(identityMergeConfirmTimer);
   identityMergeConfirmTimer = null;
   button.disabled = true;
+  button.setAttribute("aria-busy", "true");
   button.textContent = "合并中…";
   try {
     const payload = { target_person_id: targetPersonId };
@@ -758,6 +768,7 @@ async function mergeIdentity() {
   } catch (error) {
     toast(`合并失败：${error?.message || String(error)}`, true);
     button.disabled = false;
+    button.setAttribute("aria-busy", "false");
     button.dataset.confirmed = "";
     button.textContent = source.type === "account" ? "合并账号" : "合并身份";
   }
@@ -774,6 +785,7 @@ async function deleteIdentity(personId, button) {
     return;
   }
   button.disabled = true;
+  button.setAttribute("aria-busy", "true");
   button.textContent = "解除中…";
   clearDeleteConfirmation(false);
   try {
@@ -876,6 +888,7 @@ async function deleteRelationship(index, button) {
   // persistence operation cannot report a false cancel.
   clearRelationshipDeleteConfirmation();
   button.disabled = true;
+  button.setAttribute("aria-busy", "true");
   button.textContent = "删除中…";
   try {
     await apiPost("relationship-delete", payload);
@@ -925,17 +938,31 @@ function initIdentityEditor() {
 }
 
 function initTabs() {
-  document.querySelectorAll(".tabs button[data-tab]").forEach((btn) => {
+  const buttons = [...document.querySelectorAll(".tabs button[data-tab]")];
+  buttons.forEach((btn, index) => {
     btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+    btn.addEventListener("keydown", (event) => {
+      let targetIndex;
+      if (event.key === "ArrowLeft") {
+        targetIndex = (index - 1 + buttons.length) % buttons.length;
+      } else if (event.key === "ArrowRight") {
+        targetIndex = (index + 1) % buttons.length;
+      } else if (event.key === "Home") {
+        targetIndex = 0;
+      } else if (event.key === "End") {
+        targetIndex = buttons.length - 1;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      const target = buttons[targetIndex];
+      activateTab(target.dataset.tab);
+      target.focus();
+    });
   });
 }
 
-async function init() {
-  bridge = await resolveBridge();
-  if (typeof bridge.ready === "function") await bridge.ready();
-  if (!bridge || typeof bridge.apiGet !== "function") {
-    throw new Error("AstrBot 页面通信接口不可用");
-  }
+function bindPageEvents() {
   initTabs();
   initIdentityEditor();
   $("#btn-refresh").addEventListener("click", load);
@@ -974,6 +1001,30 @@ async function init() {
     const editButton = event.target.closest("[data-quick-edit]");
     if (editButton) quickEditRelationship(Number(editButton.dataset.quickEdit));
   });
+}
+
+async function init() {
+  bindPageEvents();
+  bridge = await resolveBridge();
+  if (typeof bridge.ready === "function") {
+    let timer;
+    try {
+      await Promise.race([
+        bridge.ready(),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("页面通信初始化超时，可点击刷新重试")),
+            5000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (!bridge || typeof bridge.apiGet !== "function") {
+    throw new Error("AstrBot 页面通信接口不可用");
+  }
   await Promise.allSettled([load(), loadConfig(), loadIdentities()]);
 }
 

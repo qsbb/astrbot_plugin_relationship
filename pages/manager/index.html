@@ -20,12 +20,12 @@
     </header>
 
     <nav class="tabs" role="tablist" aria-label="关系页面分区">
-      <button class="active" type="button" role="tab" aria-selected="true" data-tab="overview">关系总览</button>
-      <button type="button" role="tab" aria-selected="false" data-tab="identities">账号归属</button>
-      <button type="button" role="tab" aria-selected="false" data-tab="settings">设置</button>
+      <button id="tab-overview" class="active" type="button" role="tab" aria-controls="panel-overview" aria-selected="true" tabindex="0" data-tab="overview">关系总览</button>
+      <button id="tab-identities" type="button" role="tab" aria-controls="panel-identities" aria-selected="false" tabindex="-1" data-tab="identities">账号归属</button>
+      <button id="tab-settings" type="button" role="tab" aria-controls="panel-settings" aria-selected="false" tabindex="-1" data-tab="settings">设置</button>
     </nav>
 
-    <section class="panel active" role="tabpanel" data-panel="overview">
+    <section id="panel-overview" class="panel active" role="tabpanel" aria-labelledby="tab-overview" data-panel="overview">
       <div class="cards" aria-label="关系概览">
         <article class="metric"><span>关系总数</span><strong data-stat="user_count">—</strong></article>
         <article class="metric"><span>高好感 / 信任圈</span><strong class="accent" data-stat="high_affinity_count">—</strong></article>
@@ -93,7 +93,7 @@
       </article>
     </section>
 
-    <section class="panel" role="tabpanel" data-panel="identities">
+    <section id="panel-identities" class="panel" role="tabpanel" aria-labelledby="tab-identities" data-panel="identities">
       <div class="identity-grid">
         <article class="card">
           <div class="section-heading">
@@ -148,7 +148,7 @@
       </div>
     </section>
 
-    <section class="panel" role="tabpanel" data-panel="settings">
+    <section id="panel-settings" class="panel" role="tabpanel" aria-labelledby="tab-settings" data-panel="settings">
       <article class="card">
         <div class="section-heading">
           <div>

@@ -250,6 +250,18 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn('aria-selected="false"', self.html)
         self.assertIn('button.setAttribute("aria-selected"', self.js)
 
+    def test_tabs_have_panel_links_keyboard_roving_focus_and_timeout(self) -> None:
+        self.assertIn('aria-controls="panel-overview"', self.html)
+        self.assertIn('aria-labelledby="tab-overview"', self.html)
+        self.assertIn("button.tabIndex = active ? 0 : -1", self.js)
+        self.assertIn('event.key === "ArrowLeft"', self.js)
+        self.assertIn('event.key === "ArrowRight"', self.js)
+        self.assertIn('panel.setAttribute("aria-hidden", String(!active))', self.js)
+        self.assertIn("页面通信初始化超时，可点击刷新重试", self.js)
+        self.assertIn("@media (hover: hover) and (pointer: fine)", self.css)
+        self.assertIn("transform: scale(.97)", self.css)
+        self.assertIn("clearTimeout(timer);", self.js)
+
     def test_table_headers_have_scope(self) -> None:
         self.assertIn('<th scope="col">用户</th>', self.html)
         self.assertNotIn("<th>用户</th>", self.html)

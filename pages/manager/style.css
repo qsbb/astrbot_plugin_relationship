@@ -17,6 +17,7 @@
   --danger-soft: rgba(255, 123, 114, .12);
   --danger-text: #ffb5b0;
   --info: #72b7f2;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 * { box-sizing: border-box; }
@@ -37,13 +38,16 @@ button {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 10px 12px;
+  transition: color 160ms ease, border-color 160ms ease,
+    background-color 160ms ease, transform 160ms var(--ease-out);
 }
-button:hover { border-color: var(--accent); }
 button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-button:disabled { cursor: wait; opacity: .55; }
+button:active:not(:disabled) { transform: scale(.97); }
+button:disabled { cursor: not-allowed; opacity: .55; }
+button[aria-busy="true"] { cursor: wait; }
 
 .shell {
   width: min(1120px, calc(100% - 32px));
@@ -178,7 +182,6 @@ button:disabled { cursor: wait; opacity: .55; }
   height: 100%;
   border-radius: 999px;
   background: var(--accent);
-  transition: width .35s ease;
 }
 .band-row:nth-child(2) .bar-fill { background: var(--info); }
 .band-row:nth-child(3) .bar-fill { background: var(--muted); }
@@ -248,7 +251,6 @@ th {
 .user-id { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .profile-id { color: var(--accent); font-size: 12px; }
 .profile-stack { display: grid; gap: 4px; }
-tbody tr:hover { background: rgba(93, 214, 192, .045); }
 .empty-row td { padding: 28px; text-align: center; color: var(--muted); }
 .badge {
   display: inline-flex;
@@ -323,7 +325,7 @@ tbody tr:hover { background: rgba(93, 214, 192, .045); }
   max-width: calc(100vw - 48px);
   opacity: 1;
   transform: none;
-  transition: .2s;
+  transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out);
   padding: 12px 16px;
   border-radius: 10px;
   color: #04201b;
@@ -339,7 +341,6 @@ button.primary {
   background: var(--accent);
   border-color: var(--accent);
 }
-button.primary:hover { filter: brightness(1.1); }
 button.primary:disabled { opacity: .55; }
 
 .icon-command {
@@ -630,6 +631,16 @@ button.primary:disabled { opacity: .55; }
   .policy-grid { grid-template-columns: 1fr; }
 }
 
+@media (hover: hover) and (pointer: fine) {
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary:hover:not(:disabled) { filter: brightness(1.1); }
+  tbody tr:hover { background: rgba(93, 214, 192, .045); }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  * { scroll-behavior: auto !important; transition: none !important; }
+  html { scroll-behavior: auto !important; }
+  button,
+  #toast { transition-duration: .01ms !important; }
+  button:active:not(:disabled),
+  #toast.hidden { transform: none; }
 }
