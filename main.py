@@ -104,9 +104,10 @@ from .series_diagnostics import (
     diagnostic_events as read_diagnostic_events,
     logger,
 )
+from .series_control import SeriesControlAdapter
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -158,6 +159,7 @@ class RelationshipPlugin(Star):
         data_dir = pathlib.Path(StarTools.get_data_dir(PLUGIN_NAME))
         data_dir.mkdir(parents=True, exist_ok=True)
         self._data_dir = data_dir
+        self._series_control = SeriesControlAdapter(self)
         self._continuity_identity_secret = secrets.token_bytes(32)
         self.identity_registry = IdentityRegistry(data_dir / "identity_registry.json")
         self._identity_merge_journal_path = data_dir / _IDENTITY_MERGE_JOURNAL_NAME
@@ -208,6 +210,7 @@ class RelationshipPlugin(Star):
         self._cross_platform_memory_enabled = cross_platform_memory_enabled(merged)
         self._cross_platform_memory_top_k = cross_platform_memory_top_k(merged)
         self._cross_platform_memory_max_chars = cross_platform_memory_max_chars(merged)
+        self._series_control.sync_runtime()
         self._recover_pending_identity_merge()
         self._apply_log_level()
         self._register_pages_web_api()
@@ -241,6 +244,46 @@ class RelationshipPlugin(Star):
             "reasons": reasons,
             "version": __version__,
         }
+
+    def _apply_series_control_runtime(self, values: dict[str, Any]) -> None:
+        self._mood_enabled = bool(values["mood_enabled"])
+        self._cross_platform_memory_enabled = bool(
+            values["cross_platform_memory_enabled"]
+        )
+        self._cross_platform_memory_top_k = int(values["cross_platform_memory_top_k"])
+        self._cross_platform_memory_max_chars = int(
+            values["cross_platform_memory_max_chars"]
+        )
+        self.manager.update_runtime_config(mood_enabled=self._mood_enabled)
+
+    def series_control_contract(self):
+        return self._series_control.series_control_contract()
+
+    def series_control_schema(self):
+        return self._series_control.series_control_schema()
+
+    def series_control_snapshot(self):
+        return self._series_control.series_control_snapshot()
+
+    def validate_series_control_patch(self, patch, *, expected_revision: int):
+        return self._series_control.validate_series_control_patch(
+            patch, expected_revision=expected_revision
+        )
+
+    def apply_series_control_patch(self, patch, *, expected_revision: int):
+        return self._series_control.apply_series_control_patch(
+            patch, expected_revision=expected_revision
+        )
+
+    def reset_series_control_override(self, fields=None, *, expected_revision=None):
+        return self._series_control.reset_series_control_override(
+            fields, expected_revision=expected_revision
+        )
+
+    def series_control_set_mode(self, mode):
+        self._series_control._mode = mode if mode in {"native", "managed"} else "native"
+        self._series_control.sync_runtime()
+        return {"success": True, "mode": self._series_control._mode}
 
     def diagnostic_log_contract(self) -> dict[str, object]:
         return {
@@ -413,13 +456,9 @@ class RelationshipPlugin(Star):
                 matches.setdefault(key, account)
 
         if not matches:
-            return self._quest_event_identity_unavailable(
-                "private_account_not_found"
-            )
+            return self._quest_event_identity_unavailable("private_account_not_found")
         if len(matches) != 1:
-            return self._quest_event_identity_unavailable(
-                "private_account_ambiguous"
-            )
+            return self._quest_event_identity_unavailable("private_account_ambiguous")
         account = next(iter(matches.values()))
         return {
             "contract_version": QUEST_EVENT_IDENTITY_CONTRACT_VERSION,
@@ -455,9 +494,7 @@ class RelationshipPlugin(Star):
             platforms.setdefault(value.casefold(), value)
         return platforms
 
-    def _active_quest_platforms(
-        self, requested: dict[str, str]
-    ) -> set[str] | None:
+    def _active_quest_platforms(self, requested: dict[str, str]) -> set[str] | None:
         getter = getattr(self.context, "get_platform_inst", None)
         if not callable(getter):
             return None
@@ -967,7 +1004,11 @@ class RelationshipPlugin(Star):
         if kind == "command":
             return
 
-        block = build_injection_block(snapshot, plugin._prompt_config)
+        block = build_injection_block(
+            snapshot,
+            plugin._prompt_config,
+            is_group=bool(scope.group_id),
+        )
         if block:
             add_prompt_fragment(
                 request_context,
@@ -1293,10 +1334,13 @@ class RelationshipPlugin(Star):
             total_weight = float(sum(weights))
 
             def weighted(field: str) -> float:
-                return sum(
-                    float(row.get(field) or 0.0) * weight
-                    for row, weight in zip(rows, weights)
-                ) / total_weight
+                return (
+                    sum(
+                        float(row.get(field) or 0.0) * weight
+                        for row, weight in zip(rows, weights)
+                    )
+                    / total_weight
+                )
 
             affinity = weighted("affinity")
             profiles = sorted(
@@ -1868,7 +1912,9 @@ class RelationshipPlugin(Star):
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(document, handle, ensure_ascii=False, sort_keys=True, indent=2)
+                json.dump(
+                    document, handle, ensure_ascii=False, sort_keys=True, indent=2
+                )
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp_name, path)
@@ -1903,7 +1949,9 @@ class RelationshipPlugin(Star):
             if not target or not isinstance(raw_sources, list):
                 return None
             sources = tuple(
-                str(value or "").strip() for value in raw_sources if str(value or "").strip()
+                str(value or "").strip()
+                for value in raw_sources
+                if str(value or "").strip()
             )
             if not sources:
                 return None
@@ -2116,8 +2164,10 @@ class RelationshipPlugin(Star):
                 whitelist_aliases: tuple[str, ...] = ()
 
                 if isinstance(account, dict):
-                    _, _, expected_account = self.identity_registry.preview_merge_account(
-                        target_person_id, account
+                    _, _, expected_account = (
+                        self.identity_registry.preview_merge_account(
+                            target_person_id, account
+                        )
                     )
                     intent_account = expected_account.as_dict()
                     source_keys_by_profile = {
@@ -2149,7 +2199,9 @@ class RelationshipPlugin(Star):
                     else:
                         source_mode = "orphan"
                         source_keys_by_profile = {
-                            profile_id: (person_state_key(profile_id, source_person_id),)
+                            profile_id: (
+                                person_state_key(profile_id, source_person_id),
+                            )
                             for profile_id in profile_ids
                         }
                         if not any(
@@ -2246,7 +2298,11 @@ class RelationshipPlugin(Star):
                         else payload
                     )
                 payload = {"success": False, "error": str(exc) or "INVALID_MERGE"}
-                return json_response(payload, status_code=400) if json_response else payload
+                return (
+                    json_response(payload, status_code=400)
+                    if json_response
+                    else payload
+                )
             except Exception as exc:
                 if operation_stage == "whitelist":
                     payload = {
@@ -2284,7 +2340,11 @@ class RelationshipPlugin(Star):
                         else (str(exc) or type(exc).__name__)
                     ),
                 }
-                return json_response(payload, status_code=500) if json_response else payload
+                return (
+                    json_response(payload, status_code=500)
+                    if json_response
+                    else payload
+                )
             finally:
                 if config_locked:
                     self._config_write_lock.release()
@@ -2376,8 +2436,8 @@ class RelationshipPlugin(Star):
                 )
                 await self._config_write_lock.acquire()
                 config_locked = True
-                whitelist_value, whitelist_aliases = self._identity_unbind_whitelist_plan(
-                    person
+                whitelist_value, whitelist_aliases = (
+                    self._identity_unbind_whitelist_plan(person)
                 )
 
                 operation_stage = "preflight"
