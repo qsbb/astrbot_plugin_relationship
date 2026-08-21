@@ -38,6 +38,18 @@ def test_safe_schema_and_apply(tmp_path):
     assert a.plugin.values["cross_platform_memory_top_k"] == 7
 
 
+def test_native_mode_ignores_managed_overlay_until_enabled(tmp_path):
+    plugin = P(tmp_path)
+    adapter = SeriesControlAdapter(plugin)
+    adapter.apply_series_control_patch(
+        {"cross_platform_memory_top_k": 7}, expected_revision=0
+    )
+    adapter.set_mode("native")
+    assert plugin.values["cross_platform_memory_top_k"] == 3
+    adapter.set_mode("managed")
+    assert plugin.values["cross_platform_memory_top_k"] == 7
+
+
 def test_reject_identity_and_bounds(tmp_path):
     a = SeriesControlAdapter(P(tmp_path))
     assert (
