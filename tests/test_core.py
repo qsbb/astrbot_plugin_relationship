@@ -1161,7 +1161,11 @@ class PolicyTest(unittest.TestCase):
         self.assertEqual(lazy.response_style, "short_casual")
         warm = build_snapshot(
             MoodDecision(),
-            UserRelationState(affinity_score=90.0, familiarity_score=90.0),
+            UserRelationState(
+                affinity_score=90.0,
+                trust_score=75.0,
+                familiarity_score=90.0,
+            ),
         )
         self.assertEqual(warm.response_style, "warm_playful")
 

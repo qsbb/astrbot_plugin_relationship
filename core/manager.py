@@ -159,7 +159,9 @@ class RelationshipStateManager:
             apply_decay(state, business_now, self._decay_config)
             applied_affinity = self._apply_deltas(normalized_event, state, business_now)
             affinity_trend = self._affinity_trend.record(
-                scope.user_key, applied_affinity, now=business_now
+                self._affinity_trend_scope_key(scope),
+                applied_affinity,
+                now=business_now,
             )
             state.last_event_at = max(state.last_event_at, business_now)
             state.interaction_count += 1
@@ -220,7 +222,7 @@ class RelationshipStateManager:
             self._mood.reset(scope.session_key)
             self._mood.reset(scope.pressure_key)
             self._affect.reset(scope.pressure_key)
-            self._affinity_trend.reset(scope.user_key)
+            self._affinity_trend.reset(self._affinity_trend_scope_key(scope))
             previous = self._states.pop(scope.user_key, None)
             for alias_key in scope.state_alias_keys:
                 self._states.pop(alias_key, None)
@@ -754,8 +756,18 @@ class RelationshipStateManager:
             state,
             self._policy_config,
             affect or self._affect.peek(scope.pressure_key, now=now),
-            affinity_trend or self._affinity_trend.peek(scope.user_key, now=now),
+            affinity_trend
+            or self._affinity_trend.peek(
+                self._affinity_trend_scope_key(scope), now=now
+            ),
         )
+
+    @staticmethod
+    def _affinity_trend_scope_key(scope: RelationshipScope) -> str:
+        """Keep public-group momentum separate from private continuity."""
+        if not scope.group_id:
+            return scope.user_key
+        return f"{scope.user_key}:group:{scope.group_id}"
 
     def _record_mood(
         self, event: InteractionEvent, scope: RelationshipScope, now: float

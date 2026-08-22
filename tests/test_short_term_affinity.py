@@ -95,8 +95,10 @@ def test_policy_trend_changes_only_expression_advice() -> None:
         affect,
         AffinityTrendDecision(TREND_COOLING, -2.0, -3.0),
     )
-    assert warm.behavior.tone == "warm_attentive"
-    assert warm.behavior.initiative == "high"
+    # A warming trend alone must not promote a neutral/friend relationship to
+    # intimate-style initiative.
+    assert warm.behavior.tone == "friendly_attentive"
+    assert warm.behavior.initiative == "normal"
     assert cool.behavior.tone == "cool_polite"
     assert cool.behavior.initiative == "low"
     assert warm.affinity == cool.affinity == 50
@@ -133,7 +135,75 @@ def test_manager_uses_applied_affinity_delta_for_recent_style():
         return snapshots
 
     first, second = asyncio.run(run())
-    assert first.behavior.initiative == "low"
-    assert second.behavior.initiative == "high"
+    assert first.behavior.initiative == "normal"
+    # Even trusted semantic events cannot bypass the long-term relationship
+    # gate while the user is still in the ordinary/friend range.
+    assert second.behavior.initiative == "normal"
     assert second.affinity > first.affinity
     assert second.should_silence is False
+
+
+def test_private_trend_does_not_leak_into_group_surface() -> None:
+    import asyncio
+
+    async def run():
+        manager = RelationshipStateManager(
+            repository=MemoryRepository(), save_interval_seconds=0.0
+        )
+        for index, timestamp in enumerate((1000.0, 1010.0), 1):
+            await manager.record(
+                InteractionEvent(
+                    bot_id="bot",
+                    user_id="user",
+                    group_id=None,
+                    text="",
+                    timestamp=timestamp,
+                    kind="praise",
+                    event_id=f"private-praise-{index}",
+                    source="direct",
+                    confidence=1.0,
+                    severity=1.0,
+                )
+            )
+        return manager
+
+    manager = asyncio.run(run())
+    private_key = "persona:default:account:bot:user:user"
+    group_key = f"{private_key}:group:group-1"
+    assert manager._affinity_trend.peek(private_key, now=1010.0).style == TREND_WARMING
+    assert manager._affinity_trend.peek(group_key, now=1010.0).style == TREND_NEUTRAL
+
+
+def test_warm_style_requires_inner_circle_relationship() -> None:
+    snapshot = build_snapshot(
+        MoodDecision(),
+        UserRelationState(
+            affinity_score=80.0,
+            trust_score=75.0,
+            familiarity_score=60.0,
+        ),
+        PolicyConfig(),
+        AffectDecision(),
+        AffinityTrendDecision(TREND_WARMING, 2.0, 3.0),
+    )
+
+    assert snapshot.behavior.tone == "warm_attentive"
+    assert snapshot.behavior.initiative == "high"
+
+
+def test_close_friend_range_stays_friend_safe_during_warming() -> None:
+    snapshot = build_snapshot(
+        MoodDecision(),
+        UserRelationState(
+            affinity_score=68.0,
+            trust_score=60.0,
+            familiarity_score=30.0,
+        ),
+        PolicyConfig(),
+        AffectDecision(),
+        AffinityTrendDecision(TREND_WARMING, 2.0, 3.0),
+    )
+
+    assert snapshot.behavior.tone == "friendly_attentive"
+    assert snapshot.behavior.initiative == "normal"
+    assert "不等于恋爱" in snapshot.prompt_fragment

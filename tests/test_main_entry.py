@@ -1017,7 +1017,9 @@ class MainEntryTest(unittest.TestCase):
         )
 
         self.assertTrue(result["accepted"])
-        self.assertEqual(result["snapshot"]["behavior"]["tone"], "warm_attentive")
+        self.assertEqual(
+            result["snapshot"]["behavior"]["tone"], "friendly_attentive"
+        )
         state = self.plugin.manager._states[
             "persona:persona-a:account:bot-1:user:user-1"
         ]
@@ -1166,6 +1168,23 @@ class MainEntryTest(unittest.TestCase):
         event = FakeEvent(text="hello", bot_id="", sender_id="")
         _run(self.plugin.on_llm_request(event, object()))
         self.assertEqual(self.plugin.manager._states, {})
+
+    def test_group_expression_injection_keeps_public_relationship_boundary(self) -> None:
+        req = types.SimpleNamespace(extra_user_content_parts=[], system_prompt="")
+        _run(
+            self.plugin.on_llm_request(
+                FakeEvent(text="去吃饭怎么样", group_id="group-1"), req
+            )
+        )
+
+        rendered = "\n".join(
+            part.get("text", "")
+            for part in req.extra_user_content_parts
+            if isinstance(part, dict)
+        )
+        self.assertIn("公开场合", rendered)
+        self.assertIn("不要在公开场合确认、升级或宣称亲密关系", rendered)
+        self.assertIn("不等于恋爱", rendered)
 
     def test_on_llm_request_isolates_the_same_user_between_personas(self) -> None:
         def request(persona_id: str):

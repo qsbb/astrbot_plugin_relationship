@@ -20,6 +20,12 @@ from .short_term_affinity import (
 
 _HIGH = 70
 _LOW = 30
+# Keep the more playful/attentive style aligned with the public
+# ``inner_circle`` tier.  The intermediate ``close``/"朋友" range remains
+# explicitly friend-safe even when its short-term trend is warming.
+_WARM_AFFINITY_MIN = 80
+_WARM_TRUST_MIN = 75
+_WARM_FAMILIARITY_MIN = 60
 
 
 @dataclass(frozen=True)
@@ -54,7 +60,7 @@ _FAMILIARITY_FRAGMENTS = {
     "stranger": "保持友好并注意分寸。",
 }
 _AFFINITY_FRAGMENTS = {
-    "fond": "可适度亲近和关心。",
+    "fond": "可适度亲近和关心，但这不等同于恋爱、占有或排他关系。",
     "distant": "保持礼貌，不必刻意热络。",
 }
 _AFFECT_FRAGMENTS = {
@@ -62,10 +68,14 @@ _AFFECT_FRAGMENTS = {
     STANCE_WARM: "本轮语气可显得更温和、亲近和上心，但不要越界或擅自承诺。",
 }
 _TREND_FRAGMENTS = {
-    TREND_WARMING: "最近的互动让关系自然升温；回复可以更上心、更主动承接，但不要夸张示好或越过边界。",
+    TREND_WARMING: "最近的互动让关系自然升温；回复可以更上心地承接，但不得据此提升关系身份、夸张示好或越过边界。",
     TREND_COOLING: "最近的互动让关系暂时降温；回复应更谨慎、克制并保留分寸，但不能冷暴力、讽刺或惩罚对方。",
     TREND_SETTLING: "前面出现过明显的关系波动，正在恢复平稳；回复自然一点，不要把上一轮情绪继续放大。",
 }
+_RELATIONSHIP_BOUNDARY_FRAGMENT = (
+    "关系状态只表示互动中的熟悉、好感和信任，不等于恋爱、主从、占有或排他关系；"
+    "不要把朋友式互动升级成亲密关系，也不要作归属式或排他性承诺。"
+)
 
 
 def build_snapshot(
@@ -90,12 +100,17 @@ def build_snapshot(
     affinity_tier = _affinity_tier(affinity)
     affect = affect or AffectDecision()
     affinity_trend = affinity_trend or AffinityTrendDecision()
+    warm_style_allowed = (
+        affinity >= _WARM_AFFINITY_MIN
+        and trust >= _WARM_TRUST_MIN
+        and familiarity >= _WARM_FAMILIARITY_MIN
+    )
 
     tone = "natural"
     length = "normal"
     initiative = "normal"
     if cfg.enable_style_hint:
-        if familiarity_tier == "old_friend" and affinity_tier == "fond":
+        if familiarity_tier == "old_friend" and warm_style_allowed:
             tone, initiative = "warm_playful", "high"
         elif familiarity_tier == "stranger" or affinity_tier == "distant":
             tone, initiative = "polite_reserved", "low"
@@ -104,11 +119,17 @@ def build_snapshot(
             if affinity_trend.style == TREND_COOLING:
                 tone, initiative = "cool_polite", "low"
         elif affect.stance == STANCE_WARM:
-            tone = "warm_attentive"
-            if affinity_trend.style == TREND_WARMING:
+            if warm_style_allowed:
+                tone = "warm_attentive"
+            elif affinity_tier != "distant":
+                tone, initiative = "friendly_attentive", "normal"
+            if warm_style_allowed and affinity_trend.style == TREND_WARMING:
                 initiative = "high"
         elif affinity_trend.style == TREND_WARMING:
-            tone, initiative = "warm_attentive", "high"
+            if warm_style_allowed:
+                tone, initiative = "warm_attentive", "high"
+            elif affinity_tier != "distant":
+                tone, initiative = "friendly_attentive", "normal"
         elif affinity_trend.style == TREND_COOLING:
             tone, initiative = "cool_polite", "low"
         if decision.mood == MOOD_ANNOYED:
@@ -132,6 +153,7 @@ def build_snapshot(
         affinity_fragment = _AFFINITY_FRAGMENTS.get(affinity_tier)
         if affinity_fragment:
             fragments.append(affinity_fragment)
+        fragments.append(_RELATIONSHIP_BOUNDARY_FRAGMENT)
         if min(trust_dimensions.values()) <= _LOW:
             fragments.append("涉及重要事实或行动时应先核验，不根据关系状态作出承诺。")
 
