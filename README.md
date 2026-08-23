@@ -167,6 +167,31 @@ snapshot = await plugin.get_relationship_snapshot(
 熟悉度原始分数。兼容的言插件会优先从 `ningxin.request_context` 1.0 读取同轮快照，
 并把情登记的关系表达片段与序、知的片段稳定排序和去重；未安装言时情仍直接注入表达约束。
 
+群聊另有独立的 `relationship.group_snapshot` 1.0 只读契约。它按
+`relationship_profile_id + bot_id + group_id` 持久化群好感、信任、熟悉度、衰减和互动习惯，
+不会进入自然人身份合并或用户 Page。群状态只提供公开群聊的表达建议，不授予任何平台权限。
+序的入群邀请自动门禁不读取群关系；它读取下方仅供服务端策略使用的邀请人好感契约。
+
+`relationship.invitation_affinity@1.0` 是服务端只读契约，按邀请人的平台账号返回好感分数，
+声明 `browser_exposed=false`、`permission_grant=false`。序用它判断邀请人是否达到自动接受阈值，
+不会把该分数暴露给 Page 或浏览器，也不会把它当作群管理员身份。
+契约不可用、版本不兼容或查询失败时保持待审。
+该门禁只影响自动接受，Page 人工同意不受影响；序中明确配置的机器人控制管理员邀请 Bot 入群时可绕过门禁。
+
+```python
+contract = plugin.group_relationship_snapshot_contract()
+snapshot = await plugin.get_group_relationship_snapshot(bot_id, group_id)
+```
+
+邀请人门禁调用示例（仅服务端插件间调用）：
+
+```python
+contract = plugin.invitation_affinity_contract()
+result = await plugin.get_invitation_affinity(
+    bot_id, inviter_user_id, platform_id=platform_id
+)
+```
+
 需要让其他插件只读列出管理员已经登记的自然人候选时，使用独立的脱敏目录契约：
 
 ```python

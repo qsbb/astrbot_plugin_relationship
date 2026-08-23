@@ -107,7 +107,7 @@ from .series_diagnostics import (
 from .series_control import SeriesControlAdapter
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.9.2"
+__version__ = "0.9.3"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -117,6 +117,10 @@ _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
 _BASELINE_KEY = "__astrbot_baseline__"
 RELATIONSHIP_SNAPSHOT_CONTRACT_NAME = "relationship.snapshot"
 RELATIONSHIP_SNAPSHOT_CONTRACT_VERSION = "1.0"
+GROUP_RELATIONSHIP_SNAPSHOT_CONTRACT_NAME = "relationship.group_snapshot"
+GROUP_RELATIONSHIP_SNAPSHOT_CONTRACT_VERSION = "1.0"
+INVITATION_AFFINITY_CONTRACT_NAME = "relationship.invitation_affinity"
+INVITATION_AFFINITY_CONTRACT_VERSION = "1.0"
 RELATIONSHIP_EVENT_CONTRACT_NAME = "relationship.event"
 RELATIONSHIP_EVENT_CONTRACT_VERSION = "1.0"
 DELIVERY_IDENTITY_CONTRACT_NAME = "relationship.delivery_identity"
@@ -311,6 +315,30 @@ class RelationshipPlugin(Star):
             "plugin": PLUGIN_NAME,
             "capabilities": ("read_snapshot",),
             "privacy": "derived_only",
+        }
+
+    def group_relationship_snapshot_contract(self) -> dict[str, object]:
+        """Declare the private, read-only group relationship gate contract."""
+        return {
+            "name": GROUP_RELATIONSHIP_SNAPSHOT_CONTRACT_NAME,
+            "version": GROUP_RELATIONSHIP_SNAPSHOT_CONTRACT_VERSION,
+            "plugin": PLUGIN_NAME,
+            "capabilities": ("read_group_snapshot",),
+            "privacy": "derived_only",
+            "browser_exposed": False,
+            "permission_grant": False,
+        }
+
+    def invitation_affinity_contract(self) -> dict[str, object]:
+        """Declare the private score lookup used by Bot-invite policy adapters."""
+        return {
+            "name": INVITATION_AFFINITY_CONTRACT_NAME,
+            "version": INVITATION_AFFINITY_CONTRACT_VERSION,
+            "plugin": PLUGIN_NAME,
+            "capabilities": ("read_invitation_affinity",),
+            "privacy": "internal_policy_only",
+            "browser_exposed": False,
+            "permission_grant": False,
         }
 
     def relationship_event_contract(self) -> dict[str, object]:
@@ -740,6 +768,98 @@ class RelationshipPlugin(Star):
             person_id=str(person_id or ""),
         )
         return self._snapshot_payload(snapshot)
+
+    async def get_group_relationship_snapshot(
+        self,
+        bot_id: str,
+        group_id: str,
+        *,
+        relationship_profile_id: str = "default",
+    ) -> dict[str, object]:
+        """Return the independent group score and handling hint for adapters."""
+        profile_id = validate_profile_id(relationship_profile_id)
+        advice = await self.manager.get_group_snapshot(
+            str(bot_id or ""),
+            str(group_id or ""),
+            relationship_profile_id=profile_id,
+        )
+        return {
+            "version": GROUP_RELATIONSHIP_SNAPSHOT_CONTRACT_VERSION,
+            "group": {
+                "affinity": int(advice.affinity),
+                "trust": int(advice.trust),
+                "familiarity": int(advice.familiarity),
+                "tier": advice.tier,
+                "behavior": {
+                    "tone": advice.behavior.tone,
+                    "length": advice.behavior.length,
+                    "initiative": advice.behavior.initiative,
+                    "boundary": advice.behavior.boundary,
+                },
+            },
+        }
+
+    async def get_invitation_affinity(
+        self,
+        bot_id: str,
+        user_id: str,
+        *,
+        platform_id: str = "",
+        relationship_profile_id: str = "default",
+    ) -> dict[str, object]:
+        """Return one inviter's numeric affinity for the private policy gate.
+
+        This is an internal, read-only adapter contract. It never grants
+        permission and is not registered as a browser-facing API. When the
+        account is bound to a natural person, the person-scoped state is used
+        so the score remains continuous across that person's accounts.
+        """
+        profile_id = validate_profile_id(relationship_profile_id)
+        normalized_bot = str(bot_id or "").strip()
+        normalized_user = str(user_id or "").strip()
+        if not normalized_bot or not normalized_user:
+            return {
+                "version": INVITATION_AFFINITY_CONTRACT_VERSION,
+                "status": "unavailable",
+                "reason": "identity_scope_required",
+            }
+
+        person_id = ""
+        normalized_platform = str(platform_id or "").strip()
+        if normalized_platform:
+            try:
+                resolved = self.identity_registry.resolve(
+                    platform_candidates=(normalized_platform,),
+                    user_id=normalized_user,
+                    bot_id=normalized_bot,
+                )
+            except ValueError:
+                return {
+                    "version": INVITATION_AFFINITY_CONTRACT_VERSION,
+                    "status": "unavailable",
+                    "reason": "account_ambiguous",
+                }
+            if resolved is not None:
+                if self._account_memory_profile(resolved.account) != profile_id:
+                    return {
+                        "version": INVITATION_AFFINITY_CONTRACT_VERSION,
+                        "status": "unavailable",
+                        "reason": "relationship_profile_mismatch",
+                    }
+                person_id = resolved.person.person_id
+
+        snapshot = await self.manager.get_snapshot(
+            normalized_bot,
+            normalized_user,
+            None,
+            relationship_profile_id=profile_id,
+            person_id=person_id,
+        )
+        return {
+            "version": INVITATION_AFFINITY_CONTRACT_VERSION,
+            "status": "available",
+            "affinity": int(snapshot.affinity),
+        }
 
     async def submit_relationship_event(
         self, payload: Mapping[str, Any]
@@ -1404,6 +1524,10 @@ class RelationshipPlugin(Star):
                 continue
             parsed = parse_state_key(key)
             if parsed is None:
+                continue
+            if parsed.get("kind") == "group":
+                # Group states have a dedicated read-only contract; they are
+                # not user/person rows and must not enter identity admin UI.
                 continue
             profile_id = parsed["profile_id"]
             user_id = parsed.get("person_id") or parsed.get("user_id") or ""

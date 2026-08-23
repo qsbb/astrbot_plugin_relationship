@@ -37,6 +37,8 @@ from .models import (
     SOURCE_PLATFORM_MESSAGE,
     TRUSTED_SEMANTIC_SOURCES,
     InteractionEvent,
+    GroupRelationState,
+    GroupRelationshipAdvice,
     RelationshipEventRecord,
     RelationshipScope,
     RelationshipSnapshot,
@@ -107,7 +109,16 @@ class RelationshipStateManager:
         self._ledger_limit = max(100, int(event_ledger_limit))
         self._logger = logger
 
-        self._states = self._repo.load_all()
+        loaded_states = self._repo.load_all()
+        self._states = {
+            key: (
+                GroupRelationState.from_dict(value.as_dict())
+                if (parsed := parse_state_key(key))
+                and parsed.get("kind") == "group"
+                else value
+            )
+            for key, value in loaded_states.items()
+        }
         load_events = getattr(self._repo, "load_events", None)
         self._events = list(load_events()) if callable(load_events) else []
         self._dedupe_keys = set()
@@ -165,6 +176,26 @@ class RelationshipStateManager:
             )
             state.last_event_at = max(state.last_event_at, business_now)
             state.interaction_count += 1
+            if scope.group_key:
+                group_state = self._states.setdefault(
+                    scope.group_key, GroupRelationState()
+                )
+                apply_decay(group_state, business_now, self._decay_config)
+                group_applied_affinity = self._apply_deltas(
+                    normalized_event,
+                    group_state,
+                    business_now,
+                    enforce_user_gates=False,
+                )
+                self._affinity_trend.record(
+                    scope.group_key,
+                    group_applied_affinity,
+                    now=business_now,
+                )
+                group_state.last_event_at = max(
+                    group_state.last_event_at, business_now
+                )
+                group_state.interaction_count += 1
             self._dirty = True
             self._maybe_save(business_now)
             snapshot = build_snapshot(
@@ -174,6 +205,7 @@ class RelationshipStateManager:
                 affect,
                 affinity_trend,
             )
+            self._attach_group_advice(snapshot, scope, business_now)
             if self._logger is not None:
                 self._logger.debug(
                     "[relationship] record event=%s kind=%s applied=%s affinity=%d trust=%d",
@@ -751,7 +783,7 @@ class RelationshipStateManager:
         else:
             state = UserRelationState.from_dict(state.as_dict())
             apply_decay(state, now, self._decay_config)
-        return build_snapshot(
+        snapshot = build_snapshot(
             decision,
             state,
             self._policy_config,
@@ -761,6 +793,96 @@ class RelationshipStateManager:
                 self._affinity_trend_scope_key(scope), now=now
             ),
         )
+        self._attach_group_advice(snapshot, scope, now)
+        return snapshot
+
+    def get_group_state(self, scope: RelationshipScope) -> GroupRelationState:
+        """Return a defensive copy of the independent group state."""
+        if not scope.group_key:
+            return GroupRelationState()
+        state = self._states.get(scope.group_key)
+        if state is None:
+            return GroupRelationState()
+        return GroupRelationState.from_dict(state.as_dict())
+
+    async def get_group_snapshot(
+        self,
+        bot_id: str,
+        group_id: str,
+        *,
+        relationship_profile_id: str = "default",
+    ) -> GroupRelationshipAdvice:
+        """Read only group relationship snapshot for permission/policy adapters."""
+        async with self._lock:
+            scope = RelationshipScope(
+                bot_id=str(bot_id or ""),
+                user_id="",
+                group_id=str(group_id or "") or None,
+                relationship_profile_id=relationship_profile_id,
+            )
+            snapshot = RelationshipSnapshot()
+            self._attach_group_advice(snapshot, scope, self._safe_clock())
+            return snapshot.group or GroupRelationshipAdvice()
+
+    def _attach_group_advice(
+        self, snapshot: RelationshipSnapshot, scope: RelationshipScope, now: float
+    ) -> None:
+        if not scope.group_key:
+            return
+        raw = self._states.get(scope.group_key)
+        group_state = (
+            GroupRelationState.from_dict(raw.as_dict())
+            if raw is not None
+            else GroupRelationState()
+        )
+        apply_decay(group_state, now, self._decay_config)
+        group_snapshot = build_snapshot(
+            MoodDecision(),
+            group_state,
+            self._policy_config,
+            AffectDecision(),
+            self._affinity_trend.peek(scope.group_key, now=now),
+        )
+        tier = self._group_tier(group_snapshot)
+        snapshot.group = GroupRelationshipAdvice(
+            affinity=group_snapshot.affinity,
+            trust=group_snapshot.trust,
+            familiarity=group_snapshot.familiarity,
+            tier=tier,
+            behavior=group_snapshot.behavior,
+            prompt_fragment=self._group_prompt_fragment(tier, group_snapshot),
+        )
+
+    @staticmethod
+    def _group_tier(snapshot: RelationshipSnapshot) -> str:
+        affinity, trust, familiarity = (
+            int(snapshot.affinity),
+            int(snapshot.trust),
+            int(snapshot.familiarity),
+        )
+        if affinity < 35 or trust < 35:
+            return "guarded"
+        if affinity >= 80 and trust >= 75 and familiarity >= 60:
+            return "inner_circle"
+        if affinity >= 65 and trust >= 60 and familiarity >= 30:
+            return "close"
+        if familiarity >= 20 or (affinity + trust) / 2 >= 55:
+            return "familiar"
+        return "neutral"
+
+    @staticmethod
+    def _group_prompt_fragment(
+        tier: str, snapshot: RelationshipSnapshot
+    ) -> str:
+        if tier == "guarded":
+            return "这个群的整体关系较谨慎；公开回复应优先清晰、克制并尊重群规。"
+        if tier == "inner_circle":
+            return "这个群的整体关系较熟悉；可以自然承接群聊氛围，但仍尊重每位成员和群规。"
+        if tier == "close":
+            return "这个群的整体关系较友好；可以自然参与话题，不越过成员边界。"
+        if tier == "familiar":
+            return "你对这个群已有一定熟悉度；保持自然、友好并遵守群规。"
+        return "这是一个普通群聊；保持礼貌、清晰，不因群体氛围擅自承诺或越权。"
 
     @staticmethod
     def _affinity_trend_scope_key(scope: RelationshipScope) -> str:
@@ -1108,9 +1230,18 @@ class RelationshipStateManager:
         return max(0.0, min(1.0, number))
 
     def _apply_deltas(
-        self, event: InteractionEvent, state: UserRelationState, now: float
+        self,
+        event: InteractionEvent,
+        state: UserRelationState,
+        now: float,
+        *,
+        enforce_user_gates: bool = True,
     ) -> float:
-        affinity_delta = self._affinity.compute(event, state)
+        affinity_delta = self._affinity.compute(
+            event,
+            state,
+            bypass_relationship_gates=not enforce_user_gates,
+        )
         trust_delta = self._trust.compute(event, state)
         familiarity_delta = self._familiarity.compute(event, state)
         try:
@@ -1128,7 +1259,7 @@ class RelationshipStateManager:
             state.daily_affinity_negative_used = 0.0
         want = affinity_delta.affinity * weight
         applied = 0.0
-        if want > 0.0:
+        if want > 0.0 and enforce_user_gates:
             want = self._limit_weighted_affinity(event, state, want)
         if want:
             cap = max(

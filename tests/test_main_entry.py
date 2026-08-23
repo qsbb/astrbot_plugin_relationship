@@ -284,6 +284,27 @@ class MainEntryTest(unittest.TestCase):
         self.assertNotIn("familiarity", snapshot)
         self.assertEqual(snapshot["behavior"]["followup"], "allow")
 
+    def test_invitation_affinity_contract_is_private_and_read_only(self):
+        contract = self.plugin.invitation_affinity_contract()
+        self.assertEqual(
+            contract,
+            {
+                "name": "relationship.invitation_affinity",
+                "version": "1.0",
+                "plugin": "astrbot_plugin_relationship",
+                "capabilities": ("read_invitation_affinity",),
+                "privacy": "internal_policy_only",
+                "browser_exposed": False,
+                "permission_grant": False,
+            },
+        )
+        result = _run(
+            self.plugin.get_invitation_affinity(
+                "bot-1", "inviter-1", platform_id="qq-main"
+            )
+        )
+        self.assertEqual(result, {"version": "1.0", "status": "available", "affinity": 50})
+
     def test_identity_candidates_contract_is_formal_and_permission_neutral(self):
         self.assertEqual(
             self.plugin.identity_candidates_contract(),

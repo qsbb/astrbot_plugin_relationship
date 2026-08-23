@@ -80,6 +80,18 @@ def account_state_key(profile_id: str, bot_id: str, user_id: str) -> str:
     )
 
 
+def group_state_key(profile_id: str, bot_id: str, group_id: str) -> str:
+    """Return the long-lived relationship state key for one QQ group.
+
+    Group state is deliberately separate from account/person state.  A group
+    can contain many users and must never be merged by the identity registry.
+    """
+    return (
+        f"persona:{normalize_profile_id(profile_id)}:group:"
+        f"{_component(bot_id)}:id:{_component(group_id)}"
+    )
+
+
 def session_state_key(
     profile_id: str,
     bot_id: str,
@@ -112,6 +124,14 @@ def parse_state_key(key: str) -> dict[str, str] | None:
             "profile_id": account.group(1),
             "bot_id": _uncomponent(account.group(2)),
             "user_id": _uncomponent(account.group(3)),
+        }
+    group = re.fullmatch(r"persona:([^:]+):group:([^:]*):id:(.+)", key)
+    if group:
+        return {
+            "kind": "group",
+            "profile_id": group.group(1),
+            "bot_id": _uncomponent(group.group(2)),
+            "group_id": _uncomponent(group.group(3)),
         }
     return None
 

@@ -51,9 +51,16 @@ class AffinityCalculator:
         return self._config
 
     def _limit_positive_gain(
-        self, event: InteractionEvent, state: UserRelationState, value: float
+        self,
+        event: InteractionEvent,
+        state: UserRelationState,
+        value: float,
+        *,
+        bypass_relationship_gates: bool = False,
     ) -> tuple[float, str]:
         cfg = self._config
+        if bypass_relationship_gates:
+            return value, "群关系不使用用户白名单/朋友区上限"
         is_whitelisted = any(
             value in cfg.whitelist_user_ids
             for value in event.relationship_whitelist_ids
@@ -73,7 +80,11 @@ class AffinityCalculator:
         self._config = config
 
     def compute(
-        self, event: InteractionEvent, state: UserRelationState
+        self,
+        event: InteractionEvent,
+        state: UserRelationState,
+        *,
+        bypass_relationship_gates: bool = False,
     ) -> DimensionDelta:
         """返回本事件期望的好感变化量（未做每日限幅）。"""
         if event.is_command:
@@ -84,7 +95,12 @@ class AffinityCalculator:
         if gain_key is not None:
             value = float(getattr(cfg, gain_key))
             if value > 0:
-                value, reason = self._limit_positive_gain(event, state, value)
+                value, reason = self._limit_positive_gain(
+                    event,
+                    state,
+                    value,
+                    bypass_relationship_gates=bypass_relationship_gates,
+                )
                 return DimensionDelta(affinity=value, reason=reason)
             return DimensionDelta(affinity=value, reason=f"事件 {event.kind}")
 
@@ -100,6 +116,8 @@ class AffinityCalculator:
             value in cfg.whitelist_user_ids
             for value in event.relationship_whitelist_ids
         )
+        if bypass_relationship_gates:
+            return DimensionDelta(affinity=cfg.message_gain, reason="群关系稳定累积")
         if not is_whitelisted:
             remaining = max(0.0, cfg.non_whitelist_ceiling - state.affinity_score)
             if remaining <= 0:

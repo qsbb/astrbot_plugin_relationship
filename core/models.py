@@ -17,6 +17,7 @@ from .profiles import (
     person_state_key,
     pressure_state_key,
     session_state_key,
+    group_state_key,
 )
 
 KIND_MESSAGE = "message"
@@ -105,6 +106,15 @@ class RelationshipScope:
     def pressure_key(self) -> str:
         """当前会话内某个用户造成的独立互动压力。"""
         return pressure_state_key(self.session_key, self.user_id)
+
+    @property
+    def group_key(self) -> str:
+        """Long-lived relationship key for the current group."""
+        if not self.group_id:
+            return ""
+        return group_state_key(
+            self.relationship_profile_id, self.bot_id, self.group_id
+        )
 
     @property
     def is_private(self) -> bool:
@@ -298,6 +308,28 @@ class BehaviorAdvice:
         }
 
 
+@dataclass(frozen=True)
+class GroupRelationshipAdvice:
+    """Derived relationship hint for one group; never a permission grant."""
+
+    affinity: int = SCORE_BASELINE
+    trust: int = SCORE_BASELINE
+    familiarity: int = 0
+    tier: str = "neutral"
+    behavior: BehaviorAdvice = field(default_factory=BehaviorAdvice)
+    prompt_fragment: str = ""
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "affinity": self.affinity,
+            "trust": self.trust,
+            "familiarity": self.familiarity,
+            "tier": self.tier,
+            "behavior": self.behavior.as_dict(),
+            "prompt_fragment": self.prompt_fragment,
+        }
+
+
 @dataclass
 class RelationshipSnapshot:
     mood: str = "normal"
@@ -312,6 +344,7 @@ class RelationshipSnapshot:
     behavior: BehaviorAdvice = field(default_factory=BehaviorAdvice)
     # relationship.snapshot@1 兼容字段；不再由“情”推进。
     followup_streak: int = 0
+    group: GroupRelationshipAdvice | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -326,6 +359,7 @@ class RelationshipSnapshot:
             "trust_dimensions": dict(self.trust_dimensions),
             "behavior": self.behavior.as_dict(),
             "followup_streak": self.followup_streak,
+            "group": self.group.as_dict() if self.group is not None else None,
         }
 
 
@@ -426,3 +460,29 @@ class UserRelationState:
             state.extra = {str(k): float(v) for k, v in extra.items()}
         state.refresh_trust_score()
         return state
+
+
+@dataclass
+class GroupRelationState(UserRelationState):
+    """Persistent state for one group, never merged with a person/account."""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> "GroupRelationState":
+        state = UserRelationState.from_dict(data)
+        return cls(
+            affinity_score=state.affinity_score,
+            trust_score=state.trust_score,
+            trust_reliability=state.trust_reliability,
+            trust_benevolence=state.trust_benevolence,
+            trust_integrity=state.trust_integrity,
+            trust_epistemic=state.trust_epistemic,
+            familiarity_score=state.familiarity_score,
+            daily_affinity_positive_used=state.daily_affinity_positive_used,
+            daily_affinity_negative_used=state.daily_affinity_negative_used,
+            daily_anchor_day=state.daily_anchor_day,
+            interaction_count=state.interaction_count,
+            last_event_at=state.last_event_at,
+            initial_prior=state.initial_prior,
+            initial_prior_applied_at=state.initial_prior_applied_at,
+            extra=dict(state.extra),
+        )

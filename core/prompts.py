@@ -82,6 +82,12 @@ def build_injection_block(
     if fragment:
         rules.append(fragment)
 
+    # Group relationship is an independent hint.  Keep it additive so a
+    # member's own relationship tone remains authoritative for direct address.
+    group = snapshot.group
+    if group is not None and group.prompt_fragment.strip():
+        rules.append(group.prompt_fragment.strip())
+
     tone_rule = _TONE_RULES.get(behavior.tone or snapshot.response_style)
     if tone_rule:
         rules.append(tone_rule)
