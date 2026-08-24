@@ -9,3 +9,8 @@ venv/
 .env
 *.log
 relationship_state.json
+
+# 本地备份/临时文件（勿提交）
+*.bak
+*.bak_*
+*.orig
