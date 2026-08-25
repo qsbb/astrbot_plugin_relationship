@@ -219,15 +219,16 @@ button[aria-busy="true"] { cursor: wait; }
   overflow: visible;
 }
 table { width: 100%; table-layout: fixed; border-collapse: collapse; }
-.relation-col-user { width: 18%; }
-.relation-col-profile { width: 13%; }
-.relation-col-band { width: 9%; }
+.relation-col-user { width: 16%; }
+.relation-col-profile { width: 11%; }
+.relation-col-band { width: 8%; }
+.relation-col-type { width: 9%; }
 .relation-col-score { width: 5%; }
 .relation-col-familiarity { width: 6%; }
 .relation-col-interactions { width: 5%; }
 .relation-col-state { width: 7%; }
-.relation-col-time { width: 14%; }
-.relation-col-actions { width: 11%; }
+.relation-col-time { width: 13%; }
+.relation-col-actions { width: 9%; }
 th,
 td {
   padding: 11px 8px;
@@ -236,8 +237,8 @@ td {
   overflow-wrap: anywhere;
   border-bottom: 1px solid var(--line);
 }
-th:nth-child(n + 3):nth-child(-n + 9),
-td:nth-child(n + 3):nth-child(-n + 9) { text-align: center; }
+th:nth-child(n + 3):nth-child(-n + 10),
+td:nth-child(n + 3):nth-child(-n + 10) { text-align: center; }
 th {
   position: sticky;
   top: 0;

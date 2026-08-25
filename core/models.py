@@ -70,6 +70,34 @@ SCORE_MIN = 0
 SCORE_MAX = 100
 SCORE_BASELINE = 50
 
+# 关系性质：由管理员显式标记，不由好感度推导。
+# 键为内部存储值，值为中文展示标签。
+# 只有 RELATIONSHIP_TYPES_ALLOWING_INTIMATE 内的类型才放行恋人级亲密表达，
+# 其余（家人/朋友/对手/队友/挚友）无论好感度多高都保持相应边界。
+RELATIONSHIP_TYPE_LABELS = {
+    "friend": "朋友",
+    "close_friend": "挚友",
+    "family": "家人",
+    "teammate": "队友",
+    "rival": "对手",
+    "lover": "情侣",
+    "exclusive": "专属联结",
+}
+RELATIONSHIP_TYPE_ALIASES = {
+    "friend": "friend", "朋友": "friend",
+    "close_friend": "close_friend", "挚友": "close_friend", "密友": "close_friend",
+    "family": "family", "家人": "family", "亲人": "family",
+    "teammate": "teammate", "队友": "teammate",
+    "rival": "rival", "对手": "rival",
+    "lover": "lover", "恋人": "lover", "情侣": "lover", "爱人": "lover",
+    "exclusive": "exclusive", "专属联结": "exclusive", "专属": "exclusive",
+}
+# 放行恋人级亲密表达的关系类型集合。同时包含英文内部值和历史中文别名，
+# 兼容早期版本直接写入中文值的旧数据。
+RELATIONSHIP_TYPES_ALLOWING_INTIMATE = frozenset(
+    {"lover", "exclusive", "恋人", "情侣", "专属联结"}
+)
+
 
 def clamp_score(value: float) -> int:
     return max(SCORE_MIN, min(SCORE_MAX, int(round(value))))

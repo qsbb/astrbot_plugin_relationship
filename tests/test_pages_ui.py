@@ -162,8 +162,20 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("async function saveRelationshipType(", self.js)
         self.assertIn('apiPost("relationship-type", payload)', self.js)
         self.assertIn("relationship_type", self.js)
-        self.assertIn('["lover", "恋人"]', self.js)
+        self.assertIn('["lover", "情侣"]', self.js)
         self.assertIn('["exclusive", "专属联结"]', self.js)
+        self.assertIn('["family", "家人"]', self.js)
+        self.assertIn('["teammate", "队友"]', self.js)
+        self.assertIn('["rival", "对手"]', self.js)
+        self.assertIn('["friend", "朋友"]', self.js)
+        self.assertIn('["close_friend", "挚友"]', self.js)
+
+    def test_overview_table_has_matching_columns(self) -> None:
+        """布局修复：colgroup 与 thead 列数一致（都含关系性质列）。"""
+        self.assertIn('class="relation-col-type"', self.html)
+        self.assertIn('<th scope="col">关系性质</th>', self.html)
+        self.assertIn('colspan="12"', self.html)
+        self.assertIn('colspan="12"', self.js)
 
     def test_overview_has_quick_identity_editor(self) -> None:
         self.assertIn('<th scope="col">操作</th>', self.html)
@@ -200,8 +212,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("只有白名单关系可以调整", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.9.0-1", self.html)
-        self.assertIn("app.js?v=0.9.0-1", self.html)
+        self.assertIn("style.css?v=0.9.5", self.html)
+        self.assertIn("app.js?v=0.9.5", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)

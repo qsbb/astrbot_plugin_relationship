@@ -4,10 +4,14 @@ const bands = ["高好感 / 信任圈", "朋友", "普通熟人", "保持距离"
 const relationshipTypeOptions = [
   ["friend", "朋友"],
   ["close_friend", "挚友"],
-  ["lover", "恋人"],
+  ["family", "家人"],
+  ["teammate", "队友"],
+  ["rival", "对手"],
+  ["lover", "情侣"],
   ["exclusive", "专属联结"],
 ];
 const relationshipTypeLabels = Object.fromEntries(relationshipTypeOptions);
+const intimateRelationshipTypes = new Set(["lover", "exclusive"]);
 
 const CONFIG_GROUPS = [
   { title: "情绪追踪", prefix: "MOOD_" },
@@ -896,7 +900,7 @@ async function saveRelationshipType(index, select) {
     await apiPost("relationship-type", payload);
     user.relationship_type = relationshipType;
     const label = relationshipTypeLabels[relationshipType] || relationshipType;
-    toast(`关系性质已设置为「${label}」${relationshipType === "lover" || relationshipType === "exclusive" ? "，将放行恋人级亲密表达" : "，保持朋友式边界"}`);
+    toast(`关系性质已设置为「${label}」${intimateRelationshipTypes.has(relationshipType) ? "，将放行恋人级亲密表达" : "，将保持相应关系边界"}`);
   } catch (error) {
     select.value = user.relationship_type || "friend";
     toast(`设置关系性质失败：${error?.message || String(error)}`, true);

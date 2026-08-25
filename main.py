@@ -69,6 +69,9 @@ from .core.manager import INITIAL_RELATIONSHIP_PRIORS, RelationshipStateManager
 from .core.models import (
     HIGH_TRUST_EVENT_SOURCES,
     KIND_INITIAL_PRIOR,
+    RELATIONSHIP_TYPE_ALIASES,
+    RELATIONSHIP_TYPE_LABELS,
+    RELATIONSHIP_TYPES_ALLOWING_INTIMATE,
     SEMANTIC_KINDS,
     SOURCE_DIRECT,
     SOURCE_RULE,
@@ -107,7 +110,7 @@ from .series_diagnostics import (
 from .series_control import SeriesControlAdapter
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.9.4"
+__version__ = "0.9.5"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -2773,13 +2776,7 @@ class RelationshipPlugin(Star):
             return json_response(payload, status_code=400) if json_response else payload
         scope_kind = str(data.get("scope_kind") or "").strip()
         raw_type = str(data.get("relationship_type") or "").strip().lower()
-        aliases = {
-            "friend": "friend", "朋友": "friend",
-            "close_friend": "close_friend", "挚友": "close_friend", "密友": "close_friend",
-            "lover": "lover", "恋人": "lover", "情侣": "lover",
-            "exclusive": "exclusive", "专属联结": "exclusive", "专属": "exclusive",
-        }
-        relationship_type = aliases.get(raw_type, "")
+        relationship_type = RELATIONSHIP_TYPE_ALIASES.get(raw_type, "")
         if not relationship_type:
             payload = {"success": False, "error": "INVALID_RELATIONSHIP_TYPE"}
             return json_response(payload, status_code=400) if json_response else payload
@@ -3059,15 +3056,11 @@ class RelationshipPlugin(Star):
             return
         snapshot = await plugin.manager.get_snapshot_for_scope(scope)
         mood_names = {"normal": "平常", "lazy": "慵懒", "annoyed": "烦躁"}
-        type_labels = {
-            "friend": "朋友", "close_friend": "挚友",
-            "lover": "恋人", "exclusive": "专属联结",
-        }
         lines = [
             f"凝心溯溪-情 v{__version__}",
             f"当前会话: {'私聊' if scope.is_private else '群聊'}",
             f"关系人格: {scope.relationship_profile_id}",
-            f"关系性质: {type_labels.get(snapshot.relationship_type, snapshot.relationship_type)}",
+            f"关系性质: {RELATIONSHIP_TYPE_LABELS.get(snapshot.relationship_type, snapshot.relationship_type)}",
             f"情绪: {mood_names.get(snapshot.mood, snapshot.mood)}",
             f"回复意愿: {snapshot.willingness}/100",
             f"好感: {snapshot.affinity}/100",
@@ -3080,10 +3073,10 @@ class RelationshipPlugin(Star):
 
     @rel_group.command("set_type")
     async def rel_set_type(self, event: AstrMessageEvent):
-        """显式标记当前用户的关系性质（friend/close_friend/lover/exclusive）。
+        """显式标记当前用户的关系性质（朋友/挚友/家人/队友/对手/情侣/专属联结）。
 
-        仅白名单用户可调用；用于把高好感关系从「朋友」升级为「恋人/专属联结」，
-        从而放行恋人级亲密表达。普通用户无权设置，防止自我越权。
+        仅白名单用户可调用；用于把高好感关系显式标记为具体关系性质，
+        只有「情侣/专属联结」会放行恋人级亲密表达。普通用户无权设置，防止自我越权。
         """
         plugin = RelationshipPlugin._current_instance or self
         profile_id = await plugin._resolve_relationship_profile(event)
@@ -3106,28 +3099,19 @@ class RelationshipPlugin(Star):
         text = plugin._get_text(event)
         # 命令格式: /rel set_type <type>
         parts = text.strip().split()
-        relationship_type = parts[-1].strip().lower() if len(parts) >= 3 else ""
-        aliases = {
-            "friend": "friend", "朋友": "friend",
-            "close_friend": "close_friend", "挚友": "close_friend", "密友": "close_friend",
-            "lover": "lover", "恋人": "lover", "情侣": "lover",
-            "exclusive": "exclusive", "专属联结": "exclusive", "专属": "exclusive",
-        }
-        normalized = aliases.get(relationship_type, "")
+        raw_type = parts[-1].strip().lower() if len(parts) >= 3 else ""
+        normalized = RELATIONSHIP_TYPE_ALIASES.get(raw_type, "")
         if not normalized:
             yield event.plain_result(
-                "用法: /rel set_type <friend|close_friend|lover|exclusive>\n"
-                "friend=朋友(默认), close_friend=挚友, lover=恋人, exclusive=专属联结"
+                "用法: /rel set_type <类型>\n"
+                "可选: friend朋友 / close_friend挚友 / family家人 / teammate队友 / rival对手 / lover情侣 / exclusive专属联结"
             )
             return
         await plugin.manager.set_relationship_type(scope, normalized)
-        label = {
-            "friend": "朋友", "close_friend": "挚友",
-            "lover": "恋人", "exclusive": "专属联结",
-        }.get(normalized, normalized)
+        label = RELATIONSHIP_TYPE_LABELS.get(normalized, normalized)
         yield event.plain_result(
             f"已将当前用户的关系性质标记为「{label}」。"
-            f"{'将放行恋人级亲密表达。' if normalized in {'lover', 'exclusive'} else '将保持朋友式边界。'}"
+            f"{'将放行恋人级亲密表达。' if normalized in RELATIONSHIP_TYPES_ALLOWING_INTIMATE else '将保持相应关系边界。'}"
         )
 
     @rel_group.command("reset")

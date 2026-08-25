@@ -1183,7 +1183,7 @@ class PolicyTest(unittest.TestCase):
         )
         self.assertEqual(snap.relationship_type, "friend")
         self.assertIn("不要把朋友式互动升级成亲密关系", snap.prompt_fragment)
-        self.assertNotIn("已被明确标记为恋人", snap.prompt_fragment)
+        self.assertNotIn("已被明确标记为情侣", snap.prompt_fragment)
 
     def test_lover_relationship_type_allows_intimate(self) -> None:
         """显式标记 lover：注入恋人放行提示，不再注入朋友边界。"""
@@ -1199,7 +1199,7 @@ class PolicyTest(unittest.TestCase):
             ),
         )
         self.assertEqual(snap.relationship_type, "lover")
-        self.assertIn("已被明确标记为恋人或专属联结", snap.prompt_fragment)
+        self.assertIn("已被明确标记为情侣或专属联结", snap.prompt_fragment)
         self.assertNotIn("不要把朋友式互动升级成亲密关系", snap.prompt_fragment)
 
     def test_exclusive_relationship_type_allows_intimate(self) -> None:
@@ -1209,7 +1209,7 @@ class PolicyTest(unittest.TestCase):
             MoodDecision(),
             UserRelationState(relationship_type="exclusive"),
         )
-        self.assertIn("已被明确标记为恋人或专属联结", snap.prompt_fragment)
+        self.assertIn("已被明确标记为情侣或专属联结", snap.prompt_fragment)
 
     def test_chinese_relationship_type_alias(self) -> None:
         from core.mood import MoodDecision
@@ -1218,7 +1218,7 @@ class PolicyTest(unittest.TestCase):
             MoodDecision(),
             UserRelationState(relationship_type="恋人"),
         )
-        self.assertIn("已被明确标记为恋人或专属联结", snap.prompt_fragment)
+        self.assertIn("已被明确标记为情侣或专属联结", snap.prompt_fragment)
 
     def test_close_friend_keeps_friend_boundary(self) -> None:
         """挚友（close_friend）仍保持朋友边界，不升级为恋人。"""
@@ -1229,6 +1229,29 @@ class PolicyTest(unittest.TestCase):
             UserRelationState(relationship_type="close_friend"),
         )
         self.assertIn("不要把朋友式互动升级成亲密关系", snap.prompt_fragment)
+
+    def test_non_intimate_relationship_types_keep_boundary(self) -> None:
+        """家人/队友/对手/朋友/挚友都不放行恋人级亲密。"""
+        from core.mood import MoodDecision
+
+        for relationship_type in ("friend", "close_friend", "family", "teammate", "rival"):
+            snap = build_snapshot(
+                MoodDecision(),
+                UserRelationState(
+                    affinity_score=95.0,
+                    trust_score=80.0,
+                    familiarity_score=90.0,
+                    relationship_type=relationship_type,
+                ),
+            )
+            self.assertIn(
+                "不要把朋友式互动升级成亲密关系",
+                snap.prompt_fragment,
+                msg=relationship_type,
+            )
+            self.assertNotIn(
+                "已被明确标记为情侣", snap.prompt_fragment, msg=relationship_type
+            )
 
     def test_relationship_type_state_roundtrip(self) -> None:
         """relationship_type 随状态持久化序列化/反序列化。"""
