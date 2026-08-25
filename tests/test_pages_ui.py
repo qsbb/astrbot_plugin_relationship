@@ -152,8 +152,18 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("user.relationship_profile_id", self.js)
         self.assertIn("user.relationship_profile_ids", self.js)
         self.assertIn('class="profile-stack"', self.js)
-        self.assertIn('colspan="11"', self.html)
-        self.assertIn('colspan="11"', self.js)
+        self.assertIn('colspan="12"', self.html)
+        self.assertIn('colspan="12"', self.js)
+
+    def test_overview_has_relationship_type_editor(self) -> None:
+        """关系性质列：下拉框编辑 + relationship-type API。"""
+        self.assertIn("关系性质", self.html)
+        self.assertIn('data-set-type="${index}"', self.js)
+        self.assertIn("async function saveRelationshipType(", self.js)
+        self.assertIn('apiPost("relationship-type", payload)', self.js)
+        self.assertIn("relationship_type", self.js)
+        self.assertIn('["lover", "恋人"]', self.js)
+        self.assertIn('["exclusive", "专属联结"]', self.js)
 
     def test_overview_has_quick_identity_editor(self) -> None:
         self.assertIn('<th scope="col">操作</th>', self.html)

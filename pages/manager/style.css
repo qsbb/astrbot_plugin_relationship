@@ -263,6 +263,15 @@ th {
 .badge.ok,
 .badge.safe { color: var(--accent); background: var(--accent-soft); }
 .badge.warn { color: var(--warn); background: var(--warn-soft); }
+.relationship-type-select {
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+  background: var(--chip);
+  color: inherit;
+  font-size: 12px;
+  max-width: 110px;
+}
 .quick-edit-command {
   padding: 7px 10px;
   border-radius: 8px;

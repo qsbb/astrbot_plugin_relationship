@@ -1,6 +1,13 @@
 let bridge = null;
 
 const bands = ["高好感 / 信任圈", "朋友", "普通熟人", "保持距离", "边界警戒"];
+const relationshipTypeOptions = [
+  ["friend", "朋友"],
+  ["close_friend", "挚友"],
+  ["lover", "恋人"],
+  ["exclusive", "专属联结"],
+];
+const relationshipTypeLabels = Object.fromEntries(relationshipTypeOptions);
 
 const CONFIG_GROUPS = [
   { title: "情绪追踪", prefix: "MOOD_" },
@@ -167,7 +174,7 @@ function render(payload) {
   if (countElement) countElement.textContent = `共 ${users.length} 条`;
   const tbody = $("#relation-tbody");
   if (!users.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">暂无关系记录</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">暂无关系记录</td></tr>';
     return;
   }
 
@@ -183,18 +190,27 @@ function render(payload) {
     const profileMarkup = profiles.map((profileId) => (
       `<code class="profile-id">${escapeHtml(profileId)}</code>`
     )).join("");
+    const currentType = relationshipTypeLabels[user.relationship_type] ? user.relationship_type : "friend";
+    const typeOptions = relationshipTypeOptions.map(([value, label]) => (
+      `<option value="${value}"${value === currentType ? " selected" : ""}>${label}</option>`
+    )).join("");
+    const typeCell = orphaned
+      ? escapeHtml(relationshipTypeLabels[currentType])
+      : `<select class="relationship-type-select" data-set-type="${index}"`
+        + ` aria-label="关系性质">${typeOptions}</select>`;
     const identityHint = orphaned
       ? `<small class="user-id">${escapeHtml(user.orphaned_person_id)} · 待重新归属的历史关系</small>`
       : (user.display_name
         ? `<small class="user-id">${escapeHtml(user.user_id)} · ${user.linked_accounts} 个账号</small>`
         : "");
     const confirmationRow = deleteConfirmation
-      ? `<tr class="relationship-detail-row"><td colspan="11">${deleteConfirmation}</td></tr>`
+      ? `<tr class="relationship-detail-row"><td colspan="12">${deleteConfirmation}</td></tr>`
       : "";
     return (`<tr class="relationship-data-row"><td data-label="用户">${escapeHtml(user.display_name || user.user_id)}`
     + `${identityHint}</td>`
     + `<td data-label="关系人格"><span class="profile-stack">${profileMarkup}</span></td>`
     + `<td data-label="关系层级">${escapeHtml(user.band)}</td>`
+    + `<td data-label="关系性质">${typeCell}</td>`
     + `<td data-label="好感">${user.affinity}</td><td data-label="信任">${user.trust}</td>`
     + `<td data-label="熟悉度">${user.familiarity}</td><td data-label="互动">${user.interaction_count}</td>`
     + `<td data-label="白名单">${user.whitelisted ? '<span class="badge ok">白名单</span>' : '<span class="badge">普通</span>'}</td>`
@@ -221,7 +237,7 @@ async function load() {
     render(await apiGet("overview"));
   } catch (error) {
     toast(`加载关系状态失败：${error?.message || String(error)}`, true);
-    $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="11">加载失败，请稍后重试</td></tr>';
+    $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="12">加载失败，请稍后重试</td></tr>';
   } finally {
     if (button) {
       button.disabled = false;
@@ -858,6 +874,37 @@ function armRelationshipDelete(index, button) {
     : `请在 8 秒内再次点击“确认删除关系”；本次只删除人格“${profiles[0]}”的关系记录，白名单设置不变`);
 }
 
+async function saveRelationshipType(index, select) {
+  const user = overviewUsers[index];
+  if (!user) return;
+  const relationshipType = String(select.value || "friend").trim();
+  const profiles = relationshipDeleteProfiles(user);
+  const profileId = profiles[0] || user.relationship_profile_id || defaultRelationshipProfile;
+  const payload = {
+    scope_kind: user.scope_kind,
+    relationship_profile_id: profileId,
+    relationship_type: relationshipType,
+  };
+  if (user.scope_kind === "person") {
+    payload.person_id = user.person_id || "";
+  } else {
+    payload.bot_id = user.quick_account?.bot_id || "";
+    payload.user_id = user.user_id || "";
+  }
+  select.disabled = true;
+  try {
+    await apiPost("relationship-type", payload);
+    user.relationship_type = relationshipType;
+    const label = relationshipTypeLabels[relationshipType] || relationshipType;
+    toast(`关系性质已设置为「${label}」${relationshipType === "lover" || relationshipType === "exclusive" ? "，将放行恋人级亲密表达" : "，保持朋友式边界"}`);
+  } catch (error) {
+    select.value = user.relationship_type || "friend";
+    toast(`设置关系性质失败：${error?.message || String(error)}`, true);
+  } finally {
+    select.disabled = false;
+  }
+}
+
 async function deleteRelationship(index, button) {
   const user = overviewUsers[index];
   if (!user) return;
@@ -969,6 +1016,11 @@ function bindPageEvents() {
   $("#btn-save-config").addEventListener("click", saveConfig);
   $("#btn-reset-config").addEventListener("click", resetConfigForm);
   $("#relation-tbody").addEventListener("change", (event) => {
+    const typeSelect = event.target.closest("[data-set-type]");
+    if (typeSelect) {
+      saveRelationshipType(Number(typeSelect.dataset.setType), typeSelect);
+      return;
+    }
     const picker = event.target.closest("[data-delete-relationship-profile]");
     if (picker) {
       pendingRelationshipDeleteProfileId = picker.value;
@@ -1030,7 +1082,7 @@ async function init() {
 
 init().catch((error) => {
   toast(`页面启动失败：${error?.message || String(error)}`, true);
-  $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="11">页面启动失败</td></tr>';
+  $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="12">页面启动失败</td></tr>';
   const configForm = $("#config-form");
   if (configForm) configForm.innerHTML = '<p class="config-loading">页面启动失败，无法加载配置</p>';
   const identityList = $("#identity-list");

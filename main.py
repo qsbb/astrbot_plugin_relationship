@@ -1409,6 +1409,12 @@ class RelationshipPlugin(Star):
                 ["POST"],
                 "删除长期关系记录",
             ),
+            (
+                "relationship-type",
+                self._page_set_relationship_type,
+                ["POST"],
+                "设置关系性质（朋友/挚友/恋人/专属联结）",
+            ),
         )
         try:
             for name, handler, methods, description in routes:
@@ -1483,6 +1489,12 @@ class RelationshipPlugin(Star):
                         int(row.get("interaction_count") or 0) for row in rows
                     ),
                     "band": self._relation_band(affinity),
+                    "relationship_type": str(
+                        max(zip(rows, weights), key=lambda pair: pair[1])[0].get(
+                            "relationship_type", "friend"
+                        )
+                        or "friend"
+                    ),
                     "whitelisted": all(bool(row.get("whitelisted")) for row in rows),
                     "boundary": (
                         "开放"
@@ -1576,6 +1588,9 @@ class RelationshipPlugin(Star):
                     "trust": round(state.trust_score, 1),
                     "familiarity": round(state.familiarity_score, 1),
                     "interaction_count": state.interaction_count,
+                    "relationship_type": str(
+                        getattr(state, "relationship_type", "friend") or "friend"
+                    ),
                     "band": self._relation_band(state.affinity_score),
                     "whitelisted": whitelisted,
                     "boundary": "开放"
@@ -2750,6 +2765,67 @@ class RelationshipPlugin(Star):
         }
         status = 200 if deleted_keys else 404
         return json_response(payload, status_code=status) if json_response else payload
+
+    async def _page_set_relationship_type(self):
+        data = await self._request_json()
+        if not isinstance(data, dict):
+            payload = {"success": False, "error": "INVALID_JSON_PAYLOAD"}
+            return json_response(payload, status_code=400) if json_response else payload
+        scope_kind = str(data.get("scope_kind") or "").strip()
+        raw_type = str(data.get("relationship_type") or "").strip().lower()
+        aliases = {
+            "friend": "friend", "朋友": "friend",
+            "close_friend": "close_friend", "挚友": "close_friend", "密友": "close_friend",
+            "lover": "lover", "恋人": "lover", "情侣": "lover",
+            "exclusive": "exclusive", "专属联结": "exclusive", "专属": "exclusive",
+        }
+        relationship_type = aliases.get(raw_type, "")
+        if not relationship_type:
+            payload = {"success": False, "error": "INVALID_RELATIONSHIP_TYPE"}
+            return json_response(payload, status_code=400) if json_response else payload
+        try:
+            profile_id = validate_profile_id(
+                str(data.get("relationship_profile_id") or "default").strip()
+            )
+            if scope_kind == "person":
+                person_id = str(data.get("person_id") or "").strip()
+                if not person_id:
+                    raise ValueError("PERSON_ID_REQUIRED")
+                scope = RelationshipScope(
+                    bot_id="",
+                    user_id="",
+                    person_id=person_id,
+                    relationship_profile_id=profile_id,
+                )
+            elif scope_kind == "account":
+                bot_id = str(data.get("bot_id") or "").strip()
+                user_id = str(data.get("user_id") or "").strip()
+                if not bot_id or not user_id:
+                    raise ValueError("ACCOUNT_SCOPE_REQUIRED")
+                scope = RelationshipScope(
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    relationship_profile_id=profile_id,
+                )
+            else:
+                raise ValueError("INVALID_SCOPE_KIND")
+            async with self._identity_write_lock:
+                blocked = self._identity_mutation_blocked_response()
+                if blocked is not None:
+                    return blocked
+                await self.manager.set_relationship_type(scope, relationship_type)
+        except ValueError as exc:
+            payload = {"success": False, "error": str(exc) or "INVALID_SCOPE"}
+            return json_response(payload, status_code=400) if json_response else payload
+        except Exception as exc:
+            payload = {
+                "success": False,
+                "error": "RELATIONSHIP_TYPE_PERSIST_FAILED",
+                "detail": str(exc) or type(exc).__name__,
+            }
+            return json_response(payload, status_code=500) if json_response else payload
+        payload = {"success": True, "relationship_type": relationship_type}
+        return json_response(payload) if json_response else payload
 
     async def _page_save_config(self):
         data = await self._request_json()
