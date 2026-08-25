@@ -107,7 +107,7 @@ from .series_diagnostics import (
 from .series_control import SeriesControlAdapter
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.9.3"
+__version__ = "0.9.4"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -2983,10 +2983,15 @@ class RelationshipPlugin(Star):
             return
         snapshot = await plugin.manager.get_snapshot_for_scope(scope)
         mood_names = {"normal": "平常", "lazy": "慵懒", "annoyed": "烦躁"}
+        type_labels = {
+            "friend": "朋友", "close_friend": "挚友",
+            "lover": "恋人", "exclusive": "专属联结",
+        }
         lines = [
             f"凝心溯溪-情 v{__version__}",
             f"当前会话: {'私聊' if scope.is_private else '群聊'}",
             f"关系人格: {scope.relationship_profile_id}",
+            f"关系性质: {type_labels.get(snapshot.relationship_type, snapshot.relationship_type)}",
             f"情绪: {mood_names.get(snapshot.mood, snapshot.mood)}",
             f"回复意愿: {snapshot.willingness}/100",
             f"好感: {snapshot.affinity}/100",
@@ -2996,6 +3001,58 @@ class RelationshipPlugin(Star):
             f"本轮静默建议: {'是' if snapshot.should_silence else '否'}",
         ]
         yield event.plain_result("\n".join(lines))
+
+    @rel_group.command("set_type")
+    async def rel_set_type(self, event: AstrMessageEvent):
+        """显式标记当前用户的关系性质（friend/close_friend/lover/exclusive）。
+
+        仅白名单用户可调用；用于把高好感关系从「朋友」升级为「恋人/专属联结」，
+        从而放行恋人级亲密表达。普通用户无权设置，防止自我越权。
+        """
+        plugin = RelationshipPlugin._current_instance or self
+        profile_id = await plugin._resolve_relationship_profile(event)
+        scope = plugin._get_scope(event, profile_id)
+        if not scope.bot_id or not scope.user_id:
+            yield event.plain_result("无法识别当前用户或 bot 身份。")
+            return
+        merged = plugin._merged_config()
+        whitelist_ids = tuple(
+            str(value).strip()
+            for value in (affinity_config(merged).whitelist_user_ids or ())
+            if str(value).strip()
+        )
+        is_whitelisted = scope.user_id in whitelist_ids or any(
+            alias in whitelist_ids for alias in scope.whitelist_alias_ids
+        )
+        if not is_whitelisted:
+            yield event.plain_result("只有白名单用户才能设置关系性质。")
+            return
+        text = plugin._get_text(event)
+        # 命令格式: /rel set_type <type>
+        parts = text.strip().split()
+        relationship_type = parts[-1].strip().lower() if len(parts) >= 3 else ""
+        aliases = {
+            "friend": "friend", "朋友": "friend",
+            "close_friend": "close_friend", "挚友": "close_friend", "密友": "close_friend",
+            "lover": "lover", "恋人": "lover", "情侣": "lover",
+            "exclusive": "exclusive", "专属联结": "exclusive", "专属": "exclusive",
+        }
+        normalized = aliases.get(relationship_type, "")
+        if not normalized:
+            yield event.plain_result(
+                "用法: /rel set_type <friend|close_friend|lover|exclusive>\n"
+                "friend=朋友(默认), close_friend=挚友, lover=恋人, exclusive=专属联结"
+            )
+            return
+        await plugin.manager.set_relationship_type(scope, normalized)
+        label = {
+            "friend": "朋友", "close_friend": "挚友",
+            "lover": "恋人", "exclusive": "专属联结",
+        }.get(normalized, normalized)
+        yield event.plain_result(
+            f"已将当前用户的关系性质标记为「{label}」。"
+            f"{'将放行恋人级亲密表达。' if normalized in {'lover', 'exclusive'} else '将保持朋友式边界。'}"
+        )
 
     @rel_group.command("reset")
     async def rel_reset(self, event: AstrMessageEvent):

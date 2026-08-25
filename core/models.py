@@ -345,6 +345,8 @@ class RelationshipSnapshot:
     # relationship.snapshot@1 兼容字段；不再由“情”推进。
     followup_streak: int = 0
     group: GroupRelationshipAdvice | None = None
+    # 关系性质：由管理员显式标记，不由好感度推导。
+    relationship_type: str = "friend"
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -359,6 +361,7 @@ class RelationshipSnapshot:
             "trust_dimensions": dict(self.trust_dimensions),
             "behavior": self.behavior.as_dict(),
             "followup_streak": self.followup_streak,
+            "relationship_type": self.relationship_type,
             "group": self.group.as_dict() if self.group is not None else None,
         }
 
@@ -379,6 +382,10 @@ class UserRelationState:
     last_event_at: float = 0.0
     initial_prior: str = ""
     initial_prior_applied_at: float = 0.0
+    # 关系性质：由管理员显式标记，不由好感度推导。
+    # friend / close_friend / lover / exclusive，默认 friend。
+    # 只有 lover 或 exclusive 才允许恋人级亲密表达。
+    relationship_type: str = "friend"
     extra: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -426,6 +433,7 @@ class UserRelationState:
             "last_event_at": self.last_event_at,
             "initial_prior": self.initial_prior,
             "initial_prior_applied_at": self.initial_prior_applied_at,
+            "relationship_type": self.relationship_type,
             "extra": dict(self.extra),
         }
 
@@ -454,6 +462,7 @@ class UserRelationState:
             initial_prior_applied_at=float(
                 data.get("initial_prior_applied_at", 0.0)  # type: ignore[arg-type]
             ),
+            relationship_type=str(data.get("relationship_type", "friend")),
         )
         extra = data.get("extra")
         if isinstance(extra, dict):

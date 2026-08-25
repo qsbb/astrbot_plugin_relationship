@@ -248,6 +248,21 @@ class RelationshipStateManager:
         async with self._lock:
             return self._snapshot(scope, self._safe_clock())
 
+    async def set_relationship_type(
+        self, scope: RelationshipScope, relationship_type: str
+    ) -> None:
+        """显式标记当前用户的关系性质（friend/close_friend/lover/exclusive）。
+
+        只影响「情」注入的表达约束（是否放行恋人级亲密表达），
+        不授予任何权限，也不改变好感/信任/熟悉度分数。
+        """
+        normalized = (relationship_type or "friend").strip() or "friend"
+        async with self._lock:
+            state = self._states.setdefault(scope.user_key, UserRelationState())
+            state.relationship_type = normalized
+            self._dirty = True
+            self._save()
+
     async def reset(self, scope: RelationshipScope) -> None:
         """重置当前会话的双层情绪及该用户长期关系。"""
         async with self._lock:
