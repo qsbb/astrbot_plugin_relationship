@@ -110,7 +110,7 @@ from .series_diagnostics import (
 from .series_control import SeriesControlAdapter
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.9.5"
+__version__ = "0.9.6"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -291,6 +291,144 @@ class RelationshipPlugin(Star):
         self._series_control._mode = mode if mode in {"native", "managed"} else "native"
         self._series_control.sync_runtime()
         return {"success": True, "mode": self._series_control._mode}
+
+    def webui_panels_contract(self) -> dict[str, object]:
+        """series.webui@1.0：向"核"独立 WebUI 声明可接管的管理面板。"""
+        return {
+            "name": "series.webui@1.0",
+            "plugin_id": PLUGIN_NAME,
+            "series_id": "ningxin_suxi",
+            "panels": (
+                {
+                    "id": "overview",
+                    "title": "关系总览",
+                    "description": "查看关系状态并设置关系性质",
+                },
+            ),
+        }
+
+    def webui_panel_data(self, panel: str) -> dict[str, Any]:
+        if panel != "overview":
+            return {"success": False, "error": "UNKNOWN_PANEL"}
+        payload = self._page_overview_unlocked()
+        if isinstance(payload, dict) and payload.get("success") is False:
+            return dict(payload)
+        users = payload.get("users", [])
+        columns = (
+            {"key": "user_id", "label": "用户 / 人物"},
+            {"key": "scope_kind", "label": "范围"},
+            {"key": "display_name", "label": "昵称"},
+            {"key": "affinity", "label": "好感"},
+            {"key": "trust", "label": "信任"},
+            {"key": "relationship_type", "label": "关系"},
+            {"key": "band", "label": "区间"},
+            {"key": "whitelisted", "label": "白名单"},
+        )
+        rows = [
+            {
+                "user_id": item.get("user_id", ""),
+                "scope_kind": "人物" if item.get("scope_kind") == "person" else "账号",
+                "display_name": item.get("display_name", ""),
+                "affinity": item.get("affinity", 0),
+                "trust": item.get("trust", 0),
+                "relationship_type": RELATIONSHIP_TYPE_LABELS.get(
+                    str(item.get("relationship_type", "friend")),
+                    str(item.get("relationship_type", "friend")),
+                ),
+                "band": item.get("band", ""),
+                "whitelisted": "是" if item.get("whitelisted") else "否",
+            }
+            for item in users[:200]
+        ]
+        type_options = [
+            (value, label) for value, label in RELATIONSHIP_TYPE_LABELS.items()
+        ]
+        return {
+            "success": True,
+            "title": "关系总览",
+            "description": f"共 {len(users)} 条关系记录，展示前 {len(rows)} 条",
+            "columns": columns,
+            "rows": rows,
+            "actions": (
+                {
+                    "id": "set_type",
+                    "label": "设置关系性质",
+                    "confirm": "确定修改该用户的关系性质？",
+                    "payload_fields": (
+                        {"name": "user_id", "type": "text", "label": "用户 ID（人物 ID 或账号 user_id）", "required": True, "hint": "从上方列表获取"},
+                        {
+                            "name": "scope_kind",
+                            "type": "select",
+                            "label": "范围",
+                            "required": True,
+                            "options": (("person", "人物"), ("account", "账号")),
+                        },
+                        {
+                            "name": "relationship_type",
+                            "type": "select",
+                            "label": "关系性质",
+                            "required": True,
+                            "options": type_options,
+                        },
+                    ),
+                },
+            ),
+        }
+
+    async def webui_panel_action(
+        self, panel: str, action: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        if panel != "overview":
+            raise ValueError("UNKNOWN_PANEL")
+        if action != "set_type":
+            raise ValueError("UNKNOWN_ACTION")
+        if not isinstance(payload, dict):
+            raise ValueError("INVALID_JSON_PAYLOAD")
+        scope_kind = str(payload.get("scope_kind") or "").strip()
+        raw_type = str(payload.get("relationship_type") or "").strip().lower()
+        relationship_type = RELATIONSHIP_TYPE_ALIASES.get(raw_type, "")
+        if not relationship_type:
+            raise ValueError("INVALID_RELATIONSHIP_TYPE")
+        try:
+            profile_id = validate_profile_id(
+                str(payload.get("relationship_profile_id") or "default").strip()
+            )
+            if scope_kind == "person":
+                person_id = str(payload.get("user_id") or "").strip()
+                if not person_id:
+                    raise ValueError("PERSON_ID_REQUIRED")
+                scope = RelationshipScope(
+                    bot_id="",
+                    user_id="",
+                    person_id=person_id,
+                    relationship_profile_id=profile_id,
+                )
+            elif scope_kind == "account":
+                bot_id = str(payload.get("bot_id") or "").strip()
+                user_id = str(payload.get("user_id") or "").strip()
+                if not bot_id or not user_id:
+                    raise ValueError("ACCOUNT_SCOPE_REQUIRED")
+                scope = RelationshipScope(
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    relationship_profile_id=profile_id,
+                )
+            else:
+                raise ValueError("INVALID_SCOPE_KIND")
+            async with self._identity_write_lock:
+                blocked = self._identity_mutation_blocked_response()
+                if blocked is not None:
+                    raise ValueError(str(blocked.get("error") or "MUTATION_BLOCKED"))
+                await self.manager.set_relationship_type(scope, relationship_type)
+        except ValueError as exc:
+            raise ValueError(str(exc) or "INVALID_SCOPE") from exc
+        except Exception as exc:  # noqa: BLE001 — 面板动作需把持久化失败显式回传
+            raise RuntimeError("RELATIONSHIP_TYPE_PERSIST_FAILED") from exc
+        return {
+            "success": True,
+            "message": f"已设置为 {RELATIONSHIP_TYPE_LABELS.get(relationship_type, relationship_type)}",
+            "relationship_type": relationship_type,
+        }
 
     def diagnostic_log_contract(self) -> dict[str, object]:
         return {

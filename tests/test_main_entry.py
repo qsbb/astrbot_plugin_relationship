@@ -268,6 +268,96 @@ class MainEntryTest(unittest.TestCase):
             snapshot["relationship_tier"],
             {"guarded", "neutral", "familiar", "close", "inner_circle"},
         )
+
+    # -- series.webui@1.0 面板契约 --------------------------------------
+
+    def test_webui_panels_contract_declares_overview_panel(self):
+        contract = self.plugin.webui_panels_contract()
+        self.assertEqual(contract["name"], "series.webui@1.0")
+        self.assertEqual(contract["plugin_id"], main.PLUGIN_NAME)
+        self.assertEqual(contract["series_id"], "ningxin_suxi")
+        panels = contract["panels"]
+        self.assertEqual(len(panels), 1)
+        self.assertEqual(panels[0]["id"], "overview")
+        self.assertTrue(panels[0]["title"])
+
+    def test_webui_panel_data_overview_renders_generic_table(self):
+        data = self.plugin.webui_panel_data("overview")
+        self.assertTrue(data["success"])
+        keys = {col["key"] for col in data["columns"]}
+        self.assertIn("user_id", keys)
+        self.assertIn("relationship_type", keys)
+        self.assertIsInstance(data["rows"], list)
+        self.assertLessEqual(len(data["rows"]), 200)
+        actions = data["actions"]
+        self.assertEqual(actions[0]["id"], "set_type")
+        field_names = {f["name"] for f in actions[0]["payload_fields"]}
+        self.assertEqual(field_names, {"user_id", "scope_kind", "relationship_type"})
+        type_values = {
+            opt[0] for opt in actions[0]["payload_fields"][2]["options"]
+        }
+        self.assertIn("lover", type_values)
+
+    def test_webui_panel_data_rejects_unknown_panel(self):
+        data = self.plugin.webui_panel_data("no_such_panel")
+        self.assertFalse(data["success"])
+        self.assertEqual(data["error"], "UNKNOWN_PANEL")
+
+    def test_webui_panel_action_set_type_person_scope(self):
+        # 先造一个人物，再通过面板动作改性质
+        self.plugin.identity_registry.upsert(
+            {
+                "person_id": "user-1",
+                "display_name": "测试用户",
+                "accounts": [
+                    {
+                        "platform_id": "qq-main",
+                        "user_id": "user-1",
+                        "bot_id": "90001",
+                        "session_id": "qq-main:FriendMessage:user-1",
+                    }
+                ],
+            }
+        )
+        result = _run(
+            self.plugin.webui_panel_action(
+                "overview",
+                "set_type",
+                {"user_id": "user-1", "scope_kind": "person", "relationship_type": "挚友"},
+            )
+        )
+        self.assertTrue(result["success"])
+        self.assertEqual(result["relationship_type"], "close_friend")
+        # 面板数据回读能反映新性质
+        data = self.plugin.webui_panel_data("overview")
+        row = next(item for item in data["rows"] if item["user_id"] == "user-1")
+        self.assertEqual(row["relationship_type"], "挚友")
+
+    def test_webui_panel_action_validates_inputs(self):
+        for payload, expected in (
+            ({"user_id": "user-1", "scope_kind": "person", "relationship_type": "nope"}, "INVALID_RELATIONSHIP_TYPE"),
+            ({"user_id": "", "scope_kind": "person", "relationship_type": "friend"}, "PERSON_ID_REQUIRED"),
+            ({"user_id": "u", "scope_kind": "account", "relationship_type": "friend"}, "ACCOUNT_SCOPE_REQUIRED"),
+            ({"user_id": "u", "scope_kind": "bad", "relationship_type": "friend"}, "INVALID_SCOPE_KIND"),
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                _run(
+                    self.plugin.webui_panel_action(
+                        "overview", "set_type", payload
+                    )
+                )
+            self.assertIn(expected, str(ctx.exception))
+
+    def test_webui_panel_action_rejects_unknown_panel_and_action(self):
+        with self.assertRaises(ValueError):
+            _run(self.plugin.webui_panel_action("bad_panel", "set_type", {}))
+        with self.assertRaises(ValueError):
+            _run(self.plugin.webui_panel_action("overview", "bad_action", {}))
+
+    def test_relationship_snapshot_excludes_raw_scores(self):
+        snapshot = _run(
+            self.plugin.get_relationship_snapshot("bot-1", "user-1", "group-1")
+        )
         self.assertEqual(
             set(snapshot),
             {
