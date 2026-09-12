@@ -462,7 +462,7 @@ class RelationshipPlugin(Star):
             "display_name": "情",
             "role": "relationship",
             "standalone": {
-                "available": true,
+                "available": True,
                 "entry": "/pages/manager",
                 "pages": ["manager"],
             },
