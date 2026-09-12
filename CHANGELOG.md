@@ -1,6 +1,15 @@
 ## [Unreleased]
 
-- 开发中（未发版）：`series.module@1.0` 模块清单；`series.webui@1.1` set_type 动作元数据。
+
+## 0.10.0 - 2026-09-12
+
+### 新增
+
+- 接入 `series.module@1.0` 与 `series.webui@2.0`；关系总览面板保留 `set_type` 动作元数据，支持核统一接管和 standalone 回退。
+
+### 修复
+
+- 修正模块契约中误写的 JSON 布尔字面量，避免运行时契约调用失败。
 
 ## 0.9.8 - 2026-09-12
 
