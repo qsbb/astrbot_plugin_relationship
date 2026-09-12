@@ -239,3 +239,84 @@ def test_merge_persons_moves_all_accounts_and_removes_source(tmp_path):
     assert merged.display_name == target.display_name
     assert merged.created_at == target.created_at
     assert len(merged.accounts) == 3
+
+
+def test_remove_account_keeps_person_and_persists_remaining_binding(tmp_path):
+    path = tmp_path / "identities.json"
+    registry = IdentityRegistry(path)
+    registry.upsert(_payload())
+
+    person, removed = registry.remove_account("summer", "qq-main", "10001")
+
+    assert removed.user_id == "10001"
+    assert person.person_id == "summer"
+    assert len(person.accounts) == 1
+    assert person.accounts[0].user_id == "tg-42"
+    reloaded = IdentityRegistry(path)
+    assert len(reloaded.get("summer").accounts) == 1
+
+
+def test_remove_account_rejects_last_account_unknown_and_invalid_id(tmp_path):
+    registry = IdentityRegistry(tmp_path / "identities.json")
+    registry.upsert(_payload())
+
+    with pytest.raises(ValueError, match="ACCOUNT_NOT_BOUND"):
+        registry.remove_account("summer", "qq-main", "missing")
+    with pytest.raises(ValueError, match="INVALID_PERSON_ID"):
+        registry.remove_account("../summer", "qq-main", "10001")
+
+    registry.remove_account("summer", "qq-main", "10001")
+    with pytest.raises(ValueError, match="LAST_ACCOUNT_REQUIRES_MERGE"):
+        registry.remove_account("summer", "telegram-main", "tg-42")
+
+
+def test_migrate_account_is_atomic_and_rejects_collisions(tmp_path):
+    path = tmp_path / "identities.json"
+    registry = IdentityRegistry(path)
+    registry.upsert(_payload("summer"))
+    registry.upsert(
+        {
+            "person_id": "other",
+            "display_name": "另一个人",
+            "accounts": [
+                {"platform_id": "discord-main", "user_id": "discord-7"}
+            ],
+        }
+    )
+
+    source, target, moved = registry.migrate_account(
+        "summer", "other", "qq-main", "10001"
+    )
+
+    assert moved.user_id == "10001"
+    assert len(source.accounts) == 1
+    assert {account.user_id for account in target.accounts} == {
+        "discord-7",
+        "10001",
+    }
+    reloaded = IdentityRegistry(path)
+    assert len(reloaded.get("summer").accounts) == 1
+    assert len(reloaded.get("other").accounts) == 2
+
+    with pytest.raises(ValueError, match="ACCOUNT_NOT_BOUND"):
+        registry.migrate_account("summer", "other", "qq-main", "10001")
+
+
+def test_migrate_account_requires_merge_for_single_account_source(tmp_path):
+    registry = IdentityRegistry(tmp_path / "identities.json")
+    registry.upsert(_payload("summer"))
+    registry.upsert(
+        {
+            "person_id": "other",
+            "display_name": "另一个人",
+            "accounts": [
+                {"platform_id": "discord-main", "user_id": "discord-7"}
+            ],
+        }
+    )
+    registry.remove_account("summer", "qq-main", "10001")
+
+    with pytest.raises(ValueError, match="SOURCE_PERSON_LAST_ACCOUNT_REQUIRES_MERGE"):
+        registry.migrate_account(
+            "summer", "other", "telegram-main", "tg-42"
+        )

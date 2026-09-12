@@ -372,6 +372,128 @@ class IdentityRegistry:
         self._persons = remaining
         return merged, source
 
+    def remove_account(
+        self, person_id: str, platform_id: str, user_id: str
+    ) -> tuple[PersonIdentity, PlatformAccount]:
+        """Remove one account while keeping the natural person alive."""
+        person_id = str(person_id or "").strip()
+        if not _PERSON_ID_RE.fullmatch(person_id):
+            raise ValueError("INVALID_PERSON_ID")
+        current = self._persons.get(person_id)
+        if current is None:
+            raise ValueError("TARGET_PERSON_NOT_FOUND")
+        platform_id = _clean(platform_id, 120)
+        user_id = _clean(user_id, 120)
+        if not platform_id or not user_id:
+            raise ValueError("ACCOUNT_ID_REQUIRED")
+        if len(current.accounts) <= 1:
+            raise ValueError("LAST_ACCOUNT_REQUIRES_MERGE")
+        removed = next(
+            (
+                account
+                for account in current.accounts
+                if account.platform_id.casefold() == platform_id.casefold()
+                and account.user_id == user_id
+            ),
+            None,
+        )
+        if removed is None:
+            raise ValueError("ACCOUNT_NOT_BOUND")
+        person = self._build_person(
+            {
+                "person_id": current.person_id,
+                "display_name": current.display_name,
+                "accounts": [
+                    account.as_dict()
+                    for account in current.accounts
+                    if account is not removed
+                ],
+            },
+            self._persons,
+        )
+        updated = dict(self._persons)
+        updated[person_id] = person
+        self._write(updated)
+        self._persons = updated
+        return person, removed
+
+    def migrate_account(
+        self,
+        source_person_id: str,
+        target_person_id: str,
+        platform_id: str,
+        user_id: str,
+    ) -> tuple[PersonIdentity, PersonIdentity, PlatformAccount]:
+        """Move one account atomically to another natural person."""
+        source_person_id = str(source_person_id or "").strip()
+        target_person_id = str(target_person_id or "").strip()
+        if not _PERSON_ID_RE.fullmatch(source_person_id) or not _PERSON_ID_RE.fullmatch(
+            target_person_id
+        ):
+            raise ValueError("INVALID_PERSON_ID")
+        if source_person_id == target_person_id:
+            raise ValueError("SAME_PERSON_IDENTITY")
+        source = self._persons.get(source_person_id)
+        target = self._persons.get(target_person_id)
+        if source is None:
+            raise ValueError("SOURCE_PERSON_NOT_FOUND")
+        if target is None:
+            raise ValueError("TARGET_PERSON_NOT_FOUND")
+        platform_id = _clean(platform_id, 120)
+        user_id = _clean(user_id, 120)
+        if not platform_id or not user_id:
+            raise ValueError("ACCOUNT_ID_REQUIRED")
+        moved = next(
+            (
+                account
+                for account in source.accounts
+                if account.platform_id.casefold() == platform_id.casefold()
+                and account.user_id == user_id
+            ),
+            None,
+        )
+        if moved is None:
+            raise ValueError("ACCOUNT_NOT_BOUND")
+        if len(source.accounts) <= 1:
+            raise ValueError("SOURCE_PERSON_LAST_ACCOUNT_REQUIRES_MERGE")
+        if any(
+            account.platform_id.casefold() == moved.platform_id.casefold()
+            and account.user_id == moved.user_id
+            for account in target.accounts
+        ):
+            raise ValueError("ACCOUNT_ALREADY_BOUND")
+
+        remaining = dict(self._persons)
+        remaining.pop(source_person_id, None)
+        source_after = self._build_person(
+            {
+                "person_id": source.person_id,
+                "display_name": source.display_name,
+                "accounts": [
+                    account.as_dict()
+                    for account in source.accounts
+                    if account is not moved
+                ],
+            },
+            remaining,
+        )
+        remaining[source_person_id] = source_after
+        target_after = self._build_person(
+            {
+                "person_id": target.person_id,
+                "display_name": target.display_name,
+                "accounts": [
+                    *(account.as_dict() for account in target.accounts),
+                    moved.as_dict(),
+                ],
+            },
+            remaining,
+        )
+        remaining[target_person_id] = target_after
+        self._write(remaining)
+        self._persons = remaining
+        return source_after, target_after, moved
+
     def _build_person(
         self,
         payload: dict[str, Any],

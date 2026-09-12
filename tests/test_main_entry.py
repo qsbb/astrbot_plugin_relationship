@@ -279,12 +279,244 @@ class MainEntryTest(unittest.TestCase):
         self.assertEqual(contract["series_id"], "ningxin_suxi")
         panels = contract["panels"]
         self.assertIsInstance(panels, list)
-        self.assertEqual(len(panels), 1)
-        self.assertEqual(panels[0]["id"], "overview")
-        self.assertTrue(panels[0]["title"])
-        self.assertEqual(panels[0]["actions"][0]["id"], "set_type")
-        self.assertEqual(panels[0]["actions"][0]["min_role"], "admin")
-        self.assertEqual(panels[0]["actions"][0]["effect"], "idempotent")
+        self.assertEqual(
+            [panel["id"] for panel in panels],
+            ["overview", "identities", "accounts"],
+        )
+        overview = next(panel for panel in panels if panel["id"] == "overview")
+        self.assertTrue(overview["title"])
+        self.assertEqual(overview["actions"][0]["id"], "set_type")
+        self.assertEqual(overview["actions"][0]["min_role"], "admin")
+        self.assertEqual(overview["actions"][0]["effect"], "idempotent")
+        self.assertEqual(contract["managed"]["level"], "actions")
+        self.assertEqual(contract["state_owner"], "plugin")
+
+    def _webui_action(self, panel, action, payload, role="owner"):
+        revision = self.plugin.webui_panel_data(panel)["revision"]
+        return _run(
+            self.plugin.webui_panel_action(
+                panel,
+                action,
+                payload,
+                {
+                    "actor": {"role": role},
+                    "expected_revision": revision,
+                    "request_id": f"test-{panel}-{action}",
+                },
+            )
+        )
+
+    @staticmethod
+    def _person_action_payload(name, platform_id, user_id, bot_id="bot-1"):
+        return {
+            "display_name": name,
+            "platform_id": platform_id,
+            "user_id": user_id,
+            "bot_id": bot_id,
+            "session_id": f"{platform_id}:FriendMessage:{user_id}",
+            "label": f"{name}-label",
+        }
+
+    def test_identity_actions_create_update_bind_and_unbind_without_raw_ids(self):
+        created = self._webui_action(
+            "identities",
+            "create_person",
+            self._person_action_payload("Alice", "qq-main", "alice-uid"),
+        )
+        person_ref = created["person_ref"]
+        self.assertTrue(person_ref.startswith("person_"))
+
+        identities = self.plugin.webui_panel_data("identities")
+        serialized = json.dumps(identities, ensure_ascii=False)
+        self.assertIn(person_ref, serialized)
+        self.assertNotIn("alice-uid", serialized)
+        self.assertNotIn("bot-1", serialized)
+
+        updated = self._webui_action(
+            "identities",
+            "update_person",
+            {"person_ref": person_ref, "display_name": "Alice Renamed"},
+        )
+        self.assertTrue(updated["success"])
+        row = next(
+            item
+            for item in self.plugin.webui_panel_data("identities")["rows"]
+            if item["person_ref"] == person_ref
+        )
+        self.assertEqual(row["display_name"], "Alice Renamed")
+
+        first_bind = self._webui_action(
+            "accounts",
+            "bind_account",
+            {
+                "person_ref": person_ref,
+                "platform_id": "telegram-main",
+                "user_id": "alice-telegram",
+                "bot_id": "bot-1",
+                "label": "telegram",
+            },
+        )
+        self.assertTrue(first_bind["identity_changed"])
+        second_bind = self._webui_action(
+            "accounts",
+            "bind_account",
+            {
+                "person_ref": person_ref,
+                "platform_id": "telegram-main",
+                "user_id": "alice-telegram",
+                "bot_id": "bot-1",
+                "label": "telegram",
+            },
+        )
+        self.assertFalse(second_bind["identity_changed"])
+
+        accounts = self.plugin.webui_panel_data("accounts")["rows"]
+        telegram = next(
+            item
+            for item in accounts
+            if item["person_ref"] == person_ref and item["platform"] == "telegram-main"
+        )
+        self._webui_action(
+            "accounts",
+            "unbind_account",
+            {"account_ref": telegram["account_ref"]},
+        )
+        with self.assertRaisesRegex(ValueError, "UNKNOWN_ACCOUNT_REF"):
+            self._webui_action(
+                "accounts",
+                "unbind_account",
+                {"account_ref": telegram["account_ref"]},
+            )
+
+    def test_identity_actions_migrate_merge_delete_and_enforce_owner(self):
+        source = self._webui_action(
+            "identities",
+            "create_person",
+            self._person_action_payload("Source", "platform-a", "source-a"),
+        )
+        self._webui_action(
+            "accounts",
+            "bind_account",
+            {
+                "person_ref": source["person_ref"],
+                "platform_id": "platform-b",
+                "user_id": "source-b",
+                "bot_id": "bot-1",
+            },
+        )
+        target = self._webui_action(
+            "identities",
+            "create_person",
+            self._person_action_payload("Target", "platform-c", "target-c"),
+        )
+        account_rows = self.plugin.webui_panel_data("accounts")["rows"]
+        source_b = next(
+            item
+            for item in account_rows
+            if item["person_ref"] == source["person_ref"]
+            and item["platform"] == "platform-b"
+        )
+        migrated = self._webui_action(
+            "accounts",
+            "migrate_account",
+            {
+                "account_ref": source_b["account_ref"],
+                "target_ref": target["person_ref"],
+            },
+        )
+        self.assertEqual(migrated["mode"], "account_move")
+        migrated_rows = self.plugin.webui_panel_data("accounts")["rows"]
+        moved = next(
+            item
+            for item in migrated_rows
+            if item["account_ref"] == source_b["account_ref"]
+        )
+        self.assertEqual(moved["person_ref"], target["person_ref"])
+
+        merged = self._webui_action(
+            "identities",
+            "merge_persons",
+            {
+                "source_ref": source["person_ref"],
+                "target_ref": target["person_ref"],
+            },
+        )
+        self.assertTrue(merged["success"])
+        refs = {
+            item["person_ref"]
+            for item in self.plugin.webui_panel_data("identities")["rows"]
+        }
+        self.assertNotIn(source["person_ref"], refs)
+
+        removable = self._webui_action(
+            "identities",
+            "create_person",
+            self._person_action_payload("Remove", "platform-d", "remove-d"),
+        )
+        remove_row = next(
+            item
+            for item in self.plugin.webui_panel_data("accounts")["rows"]
+            if item["person_ref"] == removable["person_ref"]
+        )
+        deleted = self._webui_action(
+            "identities",
+            "delete_person",
+            {
+                "person_ref": removable["person_ref"],
+                "restore_account_ref": remove_row["account_ref"],
+            },
+        )
+        self.assertTrue(deleted["success"])
+        with self.assertRaisesRegex(ValueError, "UNKNOWN_PERSON_REF"):
+            self._webui_action(
+                "identities",
+                "update_person",
+                {
+                    "person_ref": removable["person_ref"],
+                    "display_name": "gone",
+                },
+            )
+
+        with self.assertRaisesRegex(PermissionError, "ROLE_FORBIDDEN"):
+            self._webui_action(
+                "identities",
+                "merge_persons",
+                {
+                    "source_ref": target["person_ref"],
+                    "target_ref": target["person_ref"],
+                },
+                role="admin",
+            )
+        with self.assertRaisesRegex(PermissionError, "ROLE_FORBIDDEN"):
+            self._webui_action(
+                "identities",
+                "create_person",
+                self._person_action_payload("Viewer", "viewer", "viewer"),
+                role="viewer",
+            )
+
+    def test_identity_actions_validate_unknown_ids_revision_and_action(self):
+        with self.assertRaisesRegex(ValueError, "UNKNOWN_PERSON_REF"):
+            self._webui_action(
+                "identities",
+                "update_person",
+                {"person_ref": "person_unknown", "display_name": "x"},
+            )
+        with self.assertRaisesRegex(ValueError, "UNKNOWN_ACTION"):
+            self._webui_action("identities", "drop_all", {})
+        with self.assertRaisesRegex(ValueError, "REVISION_CONFLICT"):
+            _run(
+                self.plugin.webui_panel_action(
+                    "identities",
+                    "create_person",
+                    self._person_action_payload("Stale", "stale", "stale"),
+                    {
+                        "actor": {"role": "owner"},
+                        "expected_revision": "stale",
+                        "request_id": "stale-request",
+                    },
+                )
+            )
 
     def test_webui_panel_data_overview_renders_generic_table(self):
         data = self.plugin.webui_panel_data("overview")

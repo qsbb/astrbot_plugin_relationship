@@ -108,6 +108,7 @@ from .series_diagnostics import (
     logger,
 )
 from .series_control import SeriesControlAdapter
+from .series_webui import RelationshipWebUIAdapter
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
 __version__ = "0.10.0"
@@ -169,6 +170,7 @@ class RelationshipPlugin(Star):
         self._series_control = SeriesControlAdapter(self)
         self._continuity_identity_secret = secrets.token_bytes(32)
         self.identity_registry = IdentityRegistry(data_dir / "identity_registry.json")
+        self._series_webui = RelationshipWebUIAdapter(self)
         self._identity_merge_journal_path = data_dir / _IDENTITY_MERGE_JOURNAL_NAME
         self._identity_write_lock = asyncio.Lock()
         self._config_write_lock = asyncio.Lock()
@@ -293,165 +295,20 @@ class RelationshipPlugin(Star):
         return {"success": True, "mode": self._series_control._mode}
 
     def webui_panels_contract(self) -> dict[str, object]:
-        """series.webui@2.0：向"核"独立 WebUI 声明可接管的管理面板。"""
-        return {
-            "name": "series.webui@2.0",
-            "version": "2.0",
-            "capabilities": ["generic_table", "generic_actions", "revision"],
-            "plugin_id": PLUGIN_NAME,
-            "series_id": "ningxin_suxi",
-            "panels": [
-                {
-                    "id": "overview",
-                    "title": "关系总览",
-                    "description": "查看关系状态并设置关系性质",
-                    "actions": [
-                        {
-                            "id": "set_type",
-                            "label": "设置关系性质",
-                            "effect": "idempotent",
-                            "min_role": "admin",
-                            "revision_required": False,
-                        }
-                    ],
-                },
-            ],
-        }
+        """series.webui@2.0：统一管理关系、自然人与账号归属。"""
+        return self._series_webui.contract()
 
     def webui_panel_data(self, panel: str) -> dict[str, Any]:
-        if panel != "overview":
-            return {"success": False, "error": "UNKNOWN_PANEL"}
-        payload = self._page_overview_unlocked()
-        if isinstance(payload, dict) and payload.get("success") is False:
-            return dict(payload)
-        users = payload.get("users", [])
-        columns = (
-            {"key": "user_id", "label": "用户 / 人物"},
-            {"key": "scope_kind", "label": "范围"},
-            {"key": "display_name", "label": "昵称"},
-            {"key": "affinity", "label": "好感"},
-            {"key": "trust", "label": "信任"},
-            {"key": "relationship_type", "label": "关系"},
-            {"key": "band", "label": "区间"},
-            {"key": "whitelisted", "label": "白名单"},
-        )
-        rows = [
-            {
-                "user_id": item.get("user_id", ""),
-                "scope_kind": "人物" if item.get("scope_kind") == "person" else "账号",
-                "display_name": item.get("display_name", ""),
-                "affinity": item.get("affinity", 0),
-                "trust": item.get("trust", 0),
-                "relationship_type": RELATIONSHIP_TYPE_LABELS.get(
-                    str(item.get("relationship_type", "friend")),
-                    str(item.get("relationship_type", "friend")),
-                ),
-                "band": item.get("band", ""),
-                "whitelisted": "是" if item.get("whitelisted") else "否",
-            }
-            for item in users[:200]
-        ]
-        type_options = [
-            (value, label) for value, label in RELATIONSHIP_TYPE_LABELS.items()
-        ]
-        return {
-            "success": True,
-            "title": "关系总览",
-            "description": f"共 {len(users)} 条关系记录，展示前 {len(rows)} 条",
-            "columns": columns,
-            "rows": rows,
-            "actions": (
-                {
-                    "id": "set_type",
-                    "label": "设置关系性质",
-                    "confirm": "确定修改该用户的关系性质？",
-                    "payload_fields": (
-                        {"name": "user_id", "type": "text", "label": "用户 ID（人物 ID 或账号 user_id）", "required": True, "hint": "从上方列表获取"},
-                        {
-                            "name": "scope_kind",
-                            "type": "select",
-                            "label": "范围",
-                            "required": True,
-                            "options": (("person", "人物"), ("account", "账号")),
-                        },
-                        {
-                            "name": "relationship_type",
-                            "type": "select",
-                            "label": "关系性质",
-                            "required": True,
-                            "options": type_options,
-                        },
-                        {
-                            "name": "bot_id",
-                            "type": "text",
-                            "label": "Bot ID（账号范围时必填）",
-                            "required": False,
-                        },
-                        {
-                            "name": "relationship_profile_id",
-                            "type": "text",
-                            "label": "关系 Profile ID（可选）",
-                            "required": False,
-                        },
-                    ),
-                },
-            ),
-        }
+        return self._series_webui.panel_data(panel)
 
     async def webui_panel_action(
-        self, panel: str, action: str, payload: dict[str, Any]
+        self,
+        panel: str,
+        action: str,
+        payload: dict[str, Any],
+        context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if panel != "overview":
-            raise ValueError("UNKNOWN_PANEL")
-        if action != "set_type":
-            raise ValueError("UNKNOWN_ACTION")
-        if not isinstance(payload, dict):
-            raise ValueError("INVALID_JSON_PAYLOAD")
-        scope_kind = str(payload.get("scope_kind") or "").strip()
-        raw_type = str(payload.get("relationship_type") or "").strip().lower()
-        relationship_type = RELATIONSHIP_TYPE_ALIASES.get(raw_type, "")
-        if not relationship_type:
-            raise ValueError("INVALID_RELATIONSHIP_TYPE")
-        try:
-            profile_id = validate_profile_id(
-                str(payload.get("relationship_profile_id") or "default").strip()
-            )
-            if scope_kind == "person":
-                person_id = str(payload.get("user_id") or "").strip()
-                if not person_id:
-                    raise ValueError("PERSON_ID_REQUIRED")
-                scope = RelationshipScope(
-                    bot_id="",
-                    user_id="",
-                    person_id=person_id,
-                    relationship_profile_id=profile_id,
-                )
-            elif scope_kind == "account":
-                bot_id = str(payload.get("bot_id") or "").strip()
-                user_id = str(payload.get("user_id") or "").strip()
-                if not bot_id or not user_id:
-                    raise ValueError("ACCOUNT_SCOPE_REQUIRED")
-                scope = RelationshipScope(
-                    bot_id=bot_id,
-                    user_id=user_id,
-                    relationship_profile_id=profile_id,
-                )
-            else:
-                raise ValueError("INVALID_SCOPE_KIND")
-            async with self._identity_write_lock:
-                blocked = self._identity_mutation_blocked_response()
-                if blocked is not None:
-                    raise ValueError(str(blocked.get("error") or "MUTATION_BLOCKED"))
-                await self.manager.set_relationship_type(scope, relationship_type)
-        except ValueError as exc:
-            raise ValueError(str(exc) or "INVALID_SCOPE") from exc
-        except Exception as exc:  # noqa: BLE001 — 面板动作需把持久化失败显式回传
-            raise RuntimeError("RELATIONSHIP_TYPE_PERSIST_FAILED") from exc
-        return {
-            "success": True,
-            "message": f"已设置为 {RELATIONSHIP_TYPE_LABELS.get(relationship_type, relationship_type)}",
-            "relationship_type": relationship_type,
-        }
+        return await self._series_webui.action(panel, action, payload, context)
 
     def series_module_contract(self) -> dict[str, object]:
         """series.module@1.0：声明模块身份、独立入口与统一接管能力。"""
@@ -2018,24 +1875,158 @@ class RelationshipPlugin(Star):
     def _identity_transaction_pending(self) -> bool:
         return self._identity_merge_journal_path.exists()
 
-    def _identity_mutation_blocked_response(self):
+    def _identity_mutation_blocked_payload(self) -> dict[str, Any] | None:
         if self.manager.persistence_write_blocked:
-            payload = {
+            return {
                 "success": False,
                 "error": "RELATIONSHIP_STORAGE_READ_ONLY",
                 "detail": "relationship data uses an unsupported schema; identity changes are disabled",
+                "_status": 409,
             }
-        elif self._identity_transaction_pending():
-            payload = {
+        if self._identity_transaction_pending():
+            return {
                 "success": False,
                 "error": "IDENTITY_TRANSACTION_PENDING",
                 "detail": "a previous identity change still requires recovery",
+                "_status": 409,
             }
-        else:
+        return None
+
+    def _identity_mutation_blocked_response(self):
+        payload = self._identity_mutation_blocked_payload()
+        if payload is None:
             return None
-        return json_response(payload, status_code=409) if json_response else payload
+        return self._page_payload_response(payload)
+
+    @staticmethod
+    def _page_payload_response(payload: dict[str, Any]):
+        result = dict(payload)
+        status_code = int(result.pop("_status", 200))
+        return (
+            json_response(result, status_code=status_code)
+            if json_response
+            else result
+        )
 
     async def _save_identity_payload(self, data: dict[str, Any]):
+        result = await self._save_identity_service(data)
+        return self._page_payload_response(result)
+
+    async def _save_identity_action(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Plain-payload entry shared by the managed panel."""
+        async with self._identity_write_lock:
+            blocked = self._identity_mutation_blocked_payload()
+            if blocked is not None:
+                return blocked
+            return await self._save_identity_service(data)
+
+    async def _remove_account_service(
+        self, person_id: str, platform_id: str, user_id: str
+    ) -> dict[str, Any]:
+        """Detach one account without deleting the natural person."""
+        async with self._identity_write_lock:
+            blocked = self._identity_mutation_blocked_payload()
+            if blocked is not None:
+                return blocked
+            try:
+                person, removed = self.identity_registry.remove_account(
+                    person_id, platform_id, user_id
+                )
+            except ValueError as exc:
+                return {
+                    "success": False,
+                    "error": str(exc) or "ACCOUNT_UNBIND_FAILED",
+                    "_status": 400,
+                }
+            except Exception:  # noqa: BLE001
+                return {
+                    "success": False,
+                    "error": "IDENTITY_PERSIST_FAILED",
+                    "_status": 500,
+                }
+        return {
+            "success": True,
+            "person": person.as_dict(),
+            "removed_account": removed.as_dict(),
+            "message": "账号已从该自然人解绑",
+        }
+
+    async def _migrate_account_service(
+        self,
+        source_person_id: str,
+        target_person_id: str,
+        platform_id: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Move one account while its source person keeps at least one account."""
+        async with self._identity_write_lock:
+            blocked = self._identity_mutation_blocked_payload()
+            if blocked is not None:
+                return blocked
+            identity_before = self.identity_registry.snapshot()
+            source = self.identity_registry.get(source_person_id)
+            if source is not None and len(source.accounts) <= 1:
+                return {
+                    "success": False,
+                    "error": "SOURCE_PERSON_LAST_ACCOUNT_REQUIRES_MERGE",
+                    "_status": 409,
+                }
+            try:
+                source_after, target_after, moved = (
+                    self.identity_registry.migrate_account(
+                        source_person_id,
+                        target_person_id,
+                        platform_id,
+                        user_id,
+                    )
+                )
+            except ValueError as exc:
+                return {
+                    "success": False,
+                    "error": str(exc) or "ACCOUNT_MIGRATE_FAILED",
+                    "_status": 400,
+                }
+            except Exception:  # noqa: BLE001
+                return {
+                    "success": False,
+                    "error": "IDENTITY_PERSIST_FAILED",
+                    "_status": 500,
+                }
+            try:
+                profile_ids = self._known_relationship_profiles()
+                bindings = tuple(
+                    (
+                        target_after.relationship_key_for(profile_id),
+                        (moved.state_key_for(profile_id),),
+                    )
+                    for profile_id in profile_ids
+                    if moved.state_key_for(profile_id)
+                )
+                changed = set(await self.manager.bind_identities(bindings))
+            except Exception:  # noqa: BLE001
+                try:
+                    self.identity_registry.restore(identity_before)
+                except Exception:  # noqa: BLE001
+                    return {
+                        "success": False,
+                        "error": "IDENTITY_ROLLBACK_FAILED",
+                        "_status": 500,
+                    }
+                return {
+                    "success": False,
+                    "error": "RELATIONSHIP_PERSIST_FAILED",
+                    "_status": 500,
+                }
+        return {
+            "success": True,
+            "source_person": source_after.as_dict(),
+            "target_person": target_after.as_dict(),
+            "migrated_account": moved.as_dict(),
+            "state_merged": bool(changed),
+            "message": "账号归属已迁移",
+        }
+
+    async def _save_identity_service(self, data: dict[str, Any]):
         identity_before = self.identity_registry.snapshot()
         identity_saved = False
         try:
@@ -2074,7 +2065,7 @@ class RelationshipPlugin(Star):
             ]
         except ValueError as exc:
             payload = {"success": False, "error": str(exc) or "INVALID_IDENTITY"}
-            return json_response(payload, status_code=400) if json_response else payload
+            return {**payload, "_status": 400}
         except Exception as exc:
             rollback_error = None
             if identity_saved:
@@ -2099,7 +2090,7 @@ class RelationshipPlugin(Star):
                     else (str(exc) or type(exc).__name__)
                 ),
             }
-            return json_response(payload, status_code=500) if json_response else payload
+            return {**payload, "_status": 500}
         prior_result: dict[str, object] = {"requested": False, "applied": False}
         if initial_prior:
             anchor = person.accounts[0]
@@ -2139,7 +2130,7 @@ class RelationshipPlugin(Star):
             "relationship_profile_id": requested_profile,
             "initial_prior": prior_result,
         }
-        return json_response(payload) if json_response else payload
+        return payload
 
     def _identity_unbind_whitelist_plan(
         self, person: Any
@@ -2447,21 +2438,25 @@ class RelationshipPlugin(Star):
 
     async def _page_merge_identity(self):
         data = await self._request_json()
+        result = await self._merge_identity_service(data)
+        return self._page_payload_response(result)
+
+    async def _merge_identity_service(self, data: dict[str, Any]):
         if not isinstance(data, dict):
             payload = {"success": False, "error": "INVALID_JSON_PAYLOAD"}
-            return json_response(payload, status_code=400) if json_response else payload
+            return {**payload, "_status": 400}
         target_person_id = str(data.get("target_person_id") or "").strip()
         source_person_id = str(data.get("source_person_id") or "").strip()
         account = data.get("account")
         if not target_person_id:
             payload = {"success": False, "error": "TARGET_PERSON_REQUIRED"}
-            return json_response(payload, status_code=400) if json_response else payload
+            return {**payload, "_status": 400}
         if bool(source_person_id) == isinstance(account, dict):
             payload = {"success": False, "error": "MERGE_SOURCE_REQUIRED"}
-            return json_response(payload, status_code=400) if json_response else payload
+            return {**payload, "_status": 400}
 
         async with self._identity_write_lock:
-            blocked = self._identity_mutation_blocked_response()
+            blocked = self._identity_mutation_blocked_payload()
             if blocked is not None:
                 return blocked
             identity_before = self.identity_registry.snapshot()
@@ -2594,11 +2589,7 @@ class RelationshipPlugin(Star):
                         "error": "WHITELIST_PRESERVE_FAILED",
                         "detail": str(exc) or type(exc).__name__,
                     }
-                    return (
-                        json_response(payload, status_code=500)
-                        if json_response
-                        else payload
-                    )
+                    return {**payload, "_status": 500}
                 rollback_error = None
                 if identity_changed:
                     try:
@@ -2613,17 +2604,9 @@ class RelationshipPlugin(Star):
                         "error": "IDENTITY_ROLLBACK_FAILED",
                         "detail": f"{exc}; rollback: {rollback_error}",
                     }
-                    return (
-                        json_response(payload, status_code=500)
-                        if json_response
-                        else payload
-                    )
+                    return {**payload, "_status": 500}
                 payload = {"success": False, "error": str(exc) or "INVALID_MERGE"}
-                return (
-                    json_response(payload, status_code=400)
-                    if json_response
-                    else payload
-                )
+                return {**payload, "_status": 400}
             except Exception as exc:
                 if operation_stage == "whitelist":
                     payload = {
@@ -2631,11 +2614,7 @@ class RelationshipPlugin(Star):
                         "error": "WHITELIST_PRESERVE_FAILED",
                         "detail": str(exc) or type(exc).__name__,
                     }
-                    return (
-                        json_response(payload, status_code=500)
-                        if json_response
-                        else payload
-                    )
+                    return {**payload, "_status": 500}
                 rollback_error = None
                 if identity_changed:
                     try:
@@ -2661,11 +2640,7 @@ class RelationshipPlugin(Star):
                         else (str(exc) or type(exc).__name__)
                     ),
                 }
-                return (
-                    json_response(payload, status_code=500)
-                    if json_response
-                    else payload
-                )
+                return {**payload, "_status": 500}
             finally:
                 if config_locked:
                     self._config_write_lock.release()
@@ -2681,20 +2656,24 @@ class RelationshipPlugin(Star):
             "whitelist_membership_preserved": True,
             "whitelist_aliases_added": list(whitelist_aliases),
         }
-        return json_response(payload) if json_response else payload
+        return payload
 
     async def _page_delete_identity(self):
         data = await self._request_json()
+        result = await self._delete_identity_service(data)
+        return self._page_payload_response(result)
+
+    async def _delete_identity_service(self, data: dict[str, Any]):
         if not isinstance(data, dict):
             payload = {"success": False, "error": "INVALID_JSON_PAYLOAD"}
-            return json_response(payload, status_code=400) if json_response else payload
+            return {**payload, "_status": 400}
         person_id = str(data.get("person_id") or "").strip()
         if not person_id:
             payload = {"success": False, "error": "PERSON_ID_REQUIRED"}
-            return json_response(payload, status_code=400) if json_response else payload
+            return {**payload, "_status": 400}
         raw_target = data.get("restore_account")
         async with self._identity_write_lock:
-            blocked = self._identity_mutation_blocked_response()
+            blocked = self._identity_mutation_blocked_payload()
             if blocked is not None:
                 return blocked
             identity_before: dict[str, Any] = {}
@@ -2711,11 +2690,7 @@ class RelationshipPlugin(Star):
                 person = self.identity_registry.get(person_id)
                 if person is None:
                     payload = {"success": False, "error": "NOT_FOUND"}
-                    return (
-                        json_response(payload, status_code=404)
-                        if json_response
-                        else payload
-                    )
+                    return {**payload, "_status": 404}
 
                 if raw_target is not None:
                     if not isinstance(raw_target, dict):
@@ -2826,19 +2801,11 @@ class RelationshipPlugin(Star):
                         "error": "IDENTITY_ROLLBACK_FAILED",
                         "detail": f"{error}; rollback: {'; '.join(rollback_errors)}",
                     }
-                    return (
-                        json_response(payload, status_code=500)
-                        if json_response
-                        else payload
-                    )
+                    return {**payload, "_status": 500}
                 if isinstance(exc, ValueError):
                     status = 404 if error == "NOT_FOUND" else 400
                     payload = {"success": False, "error": error}
-                    return (
-                        json_response(payload, status_code=status)
-                        if json_response
-                        else payload
-                    )
+                    return {**payload, "_status": status}
                 error_code = (
                     "IDENTITY_PERSIST_FAILED"
                     if operation_stage in {"journal", "identity"}
@@ -2853,11 +2820,7 @@ class RelationshipPlugin(Star):
                     "error": error_code,
                     "detail": error,
                 }
-                return (
-                    json_response(payload, status_code=500)
-                    if json_response
-                    else payload
-                )
+                return {**payload, "_status": 500}
             except BaseException:
                 if config_locked:
                     self._config_write_lock.release()
@@ -2877,7 +2840,7 @@ class RelationshipPlugin(Star):
                 "whitelist_membership_preserved": True,
                 "whitelist_aliases_added": list(whitelist_aliases),
             }
-            return json_response(payload) if json_response else payload
+            return payload
 
     async def _page_delete_relationship(self):
         data = await self._request_json()
