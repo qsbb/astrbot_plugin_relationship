@@ -110,7 +110,7 @@ from .series_diagnostics import (
 from .series_control import SeriesControlAdapter
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.9.6"
+__version__ = "0.9.7"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -296,15 +296,16 @@ class RelationshipPlugin(Star):
         """series.webui@1.0：向"核"独立 WebUI 声明可接管的管理面板。"""
         return {
             "name": "series.webui@1.0",
+            "version": "1.0",
             "plugin_id": PLUGIN_NAME,
             "series_id": "ningxin_suxi",
-            "panels": (
+            "panels": [
                 {
                     "id": "overview",
                     "title": "关系总览",
                     "description": "查看关系状态并设置关系性质",
                 },
-            ),
+            ],
         }
 
     def webui_panel_data(self, panel: str) -> dict[str, Any]:
