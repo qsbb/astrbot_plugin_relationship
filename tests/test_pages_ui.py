@@ -19,6 +19,7 @@ class PagesUiTest(unittest.TestCase):
         self.html = (PAGES_DIR / "index.html").read_text(encoding="utf-8")
         self.js = (PAGES_DIR / "app.js").read_text(encoding="utf-8")
         self.css = (PAGES_DIR / "style.css").read_text(encoding="utf-8")
+        self.series_css = (PAGES_DIR / "series-ui.css").read_text(encoding="utf-8")
         self.schema = json.loads(
             (PAGES_DIR.parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
         )
@@ -227,7 +228,7 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn(".config-field", self.css)
         self.assertIn(".config-group", self.css)
         self.assertIn(".config-hint", self.css)
-        self.assertIn("button.primary", self.css)
+        self.assertIn("button.primary", self.series_css)
 
     def test_settings_use_chinese_names_and_plain_hints(self) -> None:
         self.assertEqual(len(self.schema), 53)
@@ -281,7 +282,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn('panel.setAttribute("aria-hidden", String(!active))', self.js)
         self.assertIn("页面通信初始化超时，可点击刷新重试", self.js)
         self.assertIn("@media (hover: hover) and (pointer: fine)", self.css)
-        self.assertIn("transform: scale(.97)", self.css)
+        self.assertIn("body[data-series-ui] button:active", self.series_css)
+        self.assertIn("transform: translateY(0)", self.series_css)
         self.assertIn("clearTimeout(timer);", self.js)
 
     def test_table_headers_have_scope(self) -> None:
@@ -318,25 +320,25 @@ class PagesUiTest(unittest.TestCase):
 
     def test_css_uses_series_color_tokens(self) -> None:
         for token in (
-            "--panel-2:",
-            "--panel-3:",
-            "--track:",
-            "--chip:",
-            "--accent-soft:",
-            "--warn-soft:",
-            "--danger-soft:",
-            "--danger-text:",
-            "--info:",
+            "--si-primary:",
+            "--si-success:",
+            "--si-warning:",
+            "--si-danger:",
+            "--si-muted:",
+            "--si-line-solid:",
+            "--si-radius-sm:",
+            "--si-shadow:",
         ):
-            self.assertIn(token, self.css)
+            self.assertIn(token, self.series_css)
+        self.assertIn("var(--si-", self.css)
         self.assertNotIn("background: #102236;", self.css)
         self.assertNotIn("background: #0b1826;", self.css)
         self.assertNotIn("linear-gradient(145deg", self.css)
         self.assertNotIn("radial-gradient(circle at top right", self.css)
 
     def test_css_has_keyboard_focus_and_toast_bounds(self) -> None:
-        self.assertIn("button:focus-visible", self.css)
-        self.assertIn("outline-offset: 2px", self.css)
+        self.assertIn("button:focus-visible", self.series_css)
+        self.assertIn("box-shadow: var(--si-focus)", self.series_css)
         self.assertIn("max-width: calc(100vw - 48px)", self.css)
 
 

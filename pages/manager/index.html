@@ -4,9 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-情 · 关系状态</title>
+  <link rel="stylesheet" href="./series-ui.css" />
   <link rel="stylesheet" href="./style.css?v=0.11.0" />
 </head>
-<body>
+<body data-series-ui="1">
   <main class="shell">
     <header class="hero">
       <div>
@@ -20,9 +21,9 @@
     </header>
 
     <nav class="tabs" role="tablist" aria-label="关系页面分区">
-      <button id="tab-overview" class="active" type="button" role="tab" aria-controls="panel-overview" aria-selected="true" tabindex="0" data-tab="overview">关系总览</button>
-      <button id="tab-identities" type="button" role="tab" aria-controls="panel-identities" aria-selected="false" tabindex="-1" data-tab="identities">账号归属</button>
-      <button id="tab-settings" type="button" role="tab" aria-controls="panel-settings" aria-selected="false" tabindex="-1" data-tab="settings">设置</button>
+      <button id="tab-overview" class="tab-btn active" type="button" role="tab" aria-controls="panel-overview" aria-selected="true" tabindex="0" data-tab="overview">关系总览</button>
+      <button id="tab-identities" class="tab-btn" type="button" role="tab" aria-controls="panel-identities" aria-selected="false" tabindex="-1" data-tab="identities">账号归属</button>
+      <button id="tab-settings" class="tab-btn" type="button" role="tab" aria-controls="panel-settings" aria-selected="false" tabindex="-1" data-tab="settings">设置</button>
     </nav>
 
     <section id="panel-overview" class="panel active" role="tabpanel" aria-labelledby="tab-overview" data-panel="overview">
@@ -74,7 +75,7 @@
           <span class="pill" id="relation-count" aria-live="polite">—</span>
         </div>
         <div class="table-wrap">
-          <table>
+          <table class="relationship-table">
             <colgroup>
               <col class="relation-col-user" />
               <col class="relation-col-profile" />
@@ -165,9 +166,10 @@
       </article>
     </section>
 
-    <div id="toast" class="hidden" role="status" aria-live="polite"></div>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   </main>
   <script src="/api/plugin/page/bridge-sdk.js"></script>
+  <script src="./series-ui.js"></script>
   <script type="module" src="./app.js?v=0.11.0"></script>
 </body>
 </html>
