@@ -295,8 +295,8 @@ class RelationshipPlugin(Star):
     def webui_panels_contract(self) -> dict[str, object]:
         """series.webui@1.0：向"核"独立 WebUI 声明可接管的管理面板。"""
         return {
-            "name": "series.webui@1.0",
-            "version": "1.0",
+            "name": "series.webui@1.1",
+            "version": "1.1",
             "plugin_id": PLUGIN_NAME,
             "series_id": "ningxin_suxi",
             "panels": [
@@ -304,6 +304,15 @@ class RelationshipPlugin(Star):
                     "id": "overview",
                     "title": "关系总览",
                     "description": "查看关系状态并设置关系性质",
+                    "actions": [
+                        {
+                            "id": "set_type",
+                            "label": "设置关系性质",
+                            "effect": "idempotent",
+                            "min_role": "admin",
+                            "revision_required": False,
+                        }
+                    ],
                 },
             ],
         }
@@ -441,6 +450,24 @@ class RelationshipPlugin(Star):
             "success": True,
             "message": f"已设置为 {RELATIONSHIP_TYPE_LABELS.get(relationship_type, relationship_type)}",
             "relationship_type": relationship_type,
+        }
+
+    def series_module_contract(self) -> dict[str, object]:
+        """series.module@1.0：声明模块身份、独立入口与统一接管能力。"""
+        return {
+            "name": "series.module@1.0",
+            "version": "1.0",
+            "series_id": "ningxin_suxi",
+            "plugin_id": "astrbot_plugin_relationship",
+            "display_name": "情",
+            "role": "relationship",
+            "standalone": {
+                "available": true,
+                "entry": "/pages/manager",
+                "pages": ["manager"],
+            },
+            "capabilities": ["control", "webui", "diagnostics"],
+            "panels": ["overview"],
         }
 
     def diagnostic_log_contract(self) -> dict[str, object]:

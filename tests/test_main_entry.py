@@ -273,8 +273,8 @@ class MainEntryTest(unittest.TestCase):
 
     def test_webui_panels_contract_declares_overview_panel(self):
         contract = self.plugin.webui_panels_contract()
-        self.assertEqual(contract["name"], "series.webui@1.0")
-        self.assertEqual(contract["version"], "1.0")
+        self.assertEqual(contract["name"], "series.webui@1.1")
+        self.assertEqual(contract["version"], "1.1")
         self.assertEqual(contract["plugin_id"], main.PLUGIN_NAME)
         self.assertEqual(contract["series_id"], "ningxin_suxi")
         panels = contract["panels"]
@@ -282,6 +282,9 @@ class MainEntryTest(unittest.TestCase):
         self.assertEqual(len(panels), 1)
         self.assertEqual(panels[0]["id"], "overview")
         self.assertTrue(panels[0]["title"])
+        self.assertEqual(panels[0]["actions"][0]["id"], "set_type")
+        self.assertEqual(panels[0]["actions"][0]["min_role"], "admin")
+        self.assertEqual(panels[0]["actions"][0]["effect"], "idempotent")
 
     def test_webui_panel_data_overview_renders_generic_table(self):
         data = self.plugin.webui_panel_data("overview")
