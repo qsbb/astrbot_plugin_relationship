@@ -110,7 +110,7 @@ from .series_diagnostics import (
 from .series_control import SeriesControlAdapter
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.9.7"
+__version__ = "0.9.8"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -370,6 +370,18 @@ class RelationshipPlugin(Star):
                             "label": "关系性质",
                             "required": True,
                             "options": type_options,
+                        },
+                        {
+                            "name": "bot_id",
+                            "type": "text",
+                            "label": "Bot ID（账号范围时必填）",
+                            "required": False,
+                        },
+                        {
+                            "name": "relationship_profile_id",
+                            "type": "text",
+                            "label": "关系 Profile ID（可选）",
+                            "required": False,
                         },
                     ),
                 },

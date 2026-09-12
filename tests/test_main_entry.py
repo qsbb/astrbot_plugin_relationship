@@ -290,11 +290,24 @@ class MainEntryTest(unittest.TestCase):
         self.assertIn("user_id", keys)
         self.assertIn("relationship_type", keys)
         self.assertIsInstance(data["rows"], list)
+        action = data["actions"][0]
+        field_names = {field["name"] for field in action["payload_fields"]}
+        self.assertIn("bot_id", field_names)
+        self.assertIn("relationship_profile_id", field_names)
         self.assertLessEqual(len(data["rows"]), 200)
         actions = data["actions"]
         self.assertEqual(actions[0]["id"], "set_type")
         field_names = {f["name"] for f in actions[0]["payload_fields"]}
-        self.assertEqual(field_names, {"user_id", "scope_kind", "relationship_type"})
+        self.assertEqual(
+            field_names,
+            {
+                "user_id",
+                "scope_kind",
+                "relationship_type",
+                "bot_id",
+                "relationship_profile_id",
+            },
+        )
         type_values = {
             opt[0] for opt in actions[0]["payload_fields"][2]["options"]
         }
