@@ -269,12 +269,12 @@ class MainEntryTest(unittest.TestCase):
             {"guarded", "neutral", "familiar", "close", "inner_circle"},
         )
 
-    # -- series.webui@1.0 面板契约 --------------------------------------
+    # -- series.webui@2.0 面板契约 --------------------------------------
 
     def test_webui_panels_contract_declares_overview_panel(self):
         contract = self.plugin.webui_panels_contract()
-        self.assertEqual(contract["name"], "series.webui@1.1")
-        self.assertEqual(contract["version"], "1.1")
+        self.assertEqual(contract["name"], "series.webui@2.0")
+        self.assertEqual(contract["version"], "2.0")
         self.assertEqual(contract["plugin_id"], main.PLUGIN_NAME)
         self.assertEqual(contract["series_id"], "ningxin_suxi")
         panels = contract["panels"]

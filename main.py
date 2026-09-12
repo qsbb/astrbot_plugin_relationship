@@ -293,10 +293,11 @@ class RelationshipPlugin(Star):
         return {"success": True, "mode": self._series_control._mode}
 
     def webui_panels_contract(self) -> dict[str, object]:
-        """series.webui@1.0：向"核"独立 WebUI 声明可接管的管理面板。"""
+        """series.webui@2.0：向"核"独立 WebUI 声明可接管的管理面板。"""
         return {
-            "name": "series.webui@1.1",
-            "version": "1.1",
+            "name": "series.webui@2.0",
+            "version": "2.0",
+            "capabilities": ["generic_table", "generic_actions", "revision"],
             "plugin_id": PLUGIN_NAME,
             "series_id": "ningxin_suxi",
             "panels": [
