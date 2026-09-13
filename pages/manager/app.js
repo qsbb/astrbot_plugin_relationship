@@ -57,12 +57,20 @@ let pendingDeleteTimer = null;
 let pendingRelationshipDeleteKey = "";
 let pendingRelationshipDeleteProfileId = "";
 let pendingRelationshipDeleteTimer = null;
-const relationshipPageSize = window.matchMedia("(max-width: 760px)").matches ? 10 : 20;
-let relationshipVisible = relationshipPageSize;
+function relationshipPageSize() {
+  return window.matchMedia("(max-width: 760px)").matches ? 10 : 20;
+}
+
+let relationshipVisible = relationshipPageSize();
 let relationshipQuery = "";
 let identityQuery = "";
 let relationshipBandFilter = "";
+let relationshipTypeFilter = "";
+let relationshipProfileFilter = "";
+let relationshipWhitelistFilter = "";
+let relationshipBoundaryFilter = "";
 let relationshipSort = "default";
+const expandedRelationshipKeys = new Set();
 let autoRefreshTimer = null;
 let lastLoadedAt = 0;
 const AUTO_REFRESH_MS = 60000;
@@ -137,7 +145,6 @@ function relationshipDeleteProfilePicker(profiles, selectedProfile = "") {
     + `<select data-delete-relationship-profile aria-label="要删除的关系人格">`
     + `<option value="" disabled${selectedProfile ? "" : " selected"}>请选择关系人格</option>`
     + `${options}</select></label>`
-    + `<button type="button" data-cancel-delete-relationship>取消</button>`
     + `<small>本次只删除所选人格的关系记录；其他人格和白名单设置保持不变。</small></div>`;
 }
 
@@ -199,7 +206,7 @@ function render(payload) {
     + `<div class="bar-track"><div class="bar-fill" style="width:${((counts[name] || 0) / max * 100).toFixed(1)}%"></div></div>`
     + `<div class="band-count">${counts[name] || 0}</div></button>`
   )).join("");
-  populateBandFilter();
+  populateRelationshipFilters();
 
   const users = payload?.users || [];
   overviewUsers = users;
@@ -211,7 +218,7 @@ function updateRelationshipProgressive(total, shown) {
   if (!host) return;
   const remaining = Math.max(0, total - shown);
   const showMore = remaining > 0;
-  const showCollapse = relationshipVisible > relationshipPageSize;
+  const showCollapse = relationshipVisible > relationshipPageSize();
   host.hidden = !showMore && !showCollapse;
   host.innerHTML = [
     showMore ? `<button type="button" data-relation-more>显示更多（剩余 ${remaining} 条）</button>` : "",
@@ -258,6 +265,75 @@ function populateBandFilter() {
   relationshipBandFilter = select.value;
 }
 
+function relationshipProfileOptions() {
+  const values = new Set(relationshipProfiles.filter(Boolean));
+  overviewUsers.forEach((user) => {
+    relationshipDeleteProfiles(user).forEach((profileId) => values.add(profileId));
+  });
+  return [...values].sort();
+}
+
+function populateRelationshipFilters() {
+  populateBandFilter();
+
+  const typeSelect = $("#relation-type-filter");
+  if (typeSelect) {
+    typeSelect.innerHTML = '<option value="">全部性质</option>'
+      + relationshipTypeOptions.map(([value, label]) => (
+        `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`
+      )).join("");
+    typeSelect.value = relationshipTypeOptions.some(([value]) => value === relationshipTypeFilter)
+      ? relationshipTypeFilter
+      : "";
+    relationshipTypeFilter = typeSelect.value;
+  }
+
+  const profileSelect = $("#relation-profile-filter");
+  if (profileSelect) {
+    profileSelect.innerHTML = '<option value="">全部人格</option>'
+      + relationshipProfileOptions().map((profileId) => (
+        `<option value="${escapeHtml(profileId)}" title="${escapeHtml(profileId)}">`
+        + `${escapeHtml(relationshipProfileLabel(profileId))}</option>`
+      )).join("");
+    profileSelect.value = relationshipProfileOptions().includes(relationshipProfileFilter)
+      ? relationshipProfileFilter
+      : "";
+    relationshipProfileFilter = profileSelect.value;
+  }
+
+  const whitelistSelect = $("#relation-whitelist-filter");
+  if (whitelistSelect) {
+    whitelistSelect.value = ["yes", "no"].includes(relationshipWhitelistFilter)
+      ? relationshipWhitelistFilter
+      : "";
+    relationshipWhitelistFilter = whitelistSelect.value;
+  }
+
+  const boundarySelect = $("#relation-boundary-filter");
+  if (boundarySelect) {
+    boundarySelect.value = ["开放", "谨慎"].includes(relationshipBoundaryFilter)
+      ? relationshipBoundaryFilter
+      : "";
+    relationshipBoundaryFilter = boundarySelect.value;
+  }
+
+  const sortSelect = $("#relation-sort");
+  if (sortSelect) sortSelect.value = relationshipSort;
+}
+
+function relationshipProfileLabel(profileId) {
+  if (profileId === "default") return "默认人格";
+  if (profileId.startsWith("auto-")) return `自动 · ${profileId.slice(-4)}`;
+  return `自定义人格 · ${String(profileId).slice(-4)}`;
+}
+
+function relationshipProfileMarkup(profiles) {
+  return profiles.map((profileId) => (
+    `<code class="profile-id" title="${escapeHtml(profileId)}">`
+    + `${escapeHtml(relationshipProfileLabel(profileId))}</code>`
+  )).join("");
+}
+
 function sortRelationshipRows(rows, sort) {
   const num = (value) => Number(value || 0);
   const copy = [...rows];
@@ -269,80 +345,135 @@ function sortRelationshipRows(rows, sort) {
   return copy;
 }
 
+function relationshipMatchesFilters(user, query) {
+  if (relationshipBandFilter && user.band !== relationshipBandFilter) return false;
+  if (relationshipTypeFilter && (user.relationship_type || "friend") !== relationshipTypeFilter) return false;
+  if (relationshipProfileFilter && !relationshipDeleteProfiles(user).includes(relationshipProfileFilter)) return false;
+  if (relationshipWhitelistFilter === "yes" && !user.whitelisted) return false;
+  if (relationshipWhitelistFilter === "no" && user.whitelisted) return false;
+  if (relationshipBoundaryFilter && user.boundary !== relationshipBoundaryFilter) return false;
+  if (!query) return true;
+  const quick = user.quick_account || {};
+  return [
+    user.display_name,
+    user.user_id,
+    user.person_id,
+    user.orphaned_person_id,
+    quick.platform_id,
+    quick.platform,
+    quick.session_id,
+    quick.label,
+  ].filter(Boolean).join(" ").toLowerCase().includes(query);
+}
+
+function relationshipDetailMarkup(user, index, profiles, deletePending) {
+  const currentType = relationshipTypeLabels[user.relationship_type] ? user.relationship_type : "friend";
+  const multipleProfiles = profiles.length > 1;
+  const awaitingProfile = deletePending && multipleProfiles && !pendingRelationshipDeleteProfileId;
+  const chips = [
+    `<span class="detail-chip"><i>人格</i><span class="profile-stack">${relationshipProfileMarkup(profiles)}</span></span>`,
+    `<span class="detail-chip"><i>关系性质</i><b>${escapeHtml(relationshipTypeLabels[currentType])}</b></span>`,
+    `<span class="detail-chip"><i>互动</i><b>${escapeHtml(user.interaction_count ?? 0)} 次</b></span>`,
+    `<span class="detail-chip"><i>白名单</i><b>${user.whitelisted ? "已加入" : "普通"}</b></span>`,
+    `<span class="detail-chip"><i>边界</i><b>${escapeHtml(user.boundary || "谨慎")}</b></span>`,
+    `<span class="detail-chip"><i>范围</i><b>${user.scope_kind === "person" ? "自然人" : "平台账号"}</b></span>`,
+  ].join("");
+  const picker = deletePending && multipleProfiles
+    ? relationshipDeleteProfilePicker(profiles, pendingRelationshipDeleteProfileId)
+    : "";
+  return `<div class="relation-detail"><div class="relation-detail-chips">`
+    + `<span class="detail-label">详情</span>${chips}</div>${picker}`
+    + `<div class="relation-detail-actions">`
+    + (deletePending ? `<button type="button" data-cancel-delete-relationship>取消</button>` : "")
+    + `<button type="button" class="relationship-delete-command danger-command" `
+    + `data-delete-relationship="${index}" data-confirmed="${deletePending ? "true" : "false"}"`
+    + ` data-awaiting-profile="${awaitingProfile ? "true" : "false"}"`
+    + `${awaitingProfile ? " disabled" : ""}>`
+    + `${deletePending ? (multipleProfiles ? "确认删除所选人格" : "确认删除关系") : "删除关系"}</button>`
+    + `</div></div>`;
+}
+
+function relationshipMainRow(user, index, profiles, expanded, deletePending) {
+  const orphaned = Boolean(user.orphaned_person_id);
+  const currentType = relationshipTypeLabels[user.relationship_type] ? user.relationship_type : "friend";
+  const actionLabel = user.person_id ? "编辑归属" : (orphaned ? "处理历史关系" : "快速归属");
+  const typeOptions = relationshipTypeOptions.map(([value, label]) => (
+    `<option value="${value}"${value === currentType ? " selected" : ""}>${label}</option>`
+  )).join("");
+  const typeCell = orphaned
+    ? `<span class="badge">${escapeHtml(relationshipTypeLabels[currentType])}</span>`
+    : `<select class="relationship-type-select" data-set-type="${index}"`
+      + ` aria-label="关系性质">${typeOptions}</select>`;
+  const identityHint = `<small class="user-id">${orphaned
+    ? "待重新归属的历史关系"
+    : `${escapeHtml(user.user_id || "未知账号")} · ${escapeHtml(user.linked_accounts ?? 1)} 个账号`}</small>`
+    + (user.person_id
+      ? `<span class="person-id-line">${idChip(user.person_id, "自然人 ID")}</span>`
+      : (orphaned ? `<span class="person-id-line">${idChip(user.orphaned_person_id, "历史自然人 ID")}</span>` : ""));
+  const scores = `<div class="relation-scores">`
+    + `<span><b>${escapeHtml(user.affinity)}</b><i>好感</i></span>`
+    + `<span><b>${escapeHtml(user.trust)}</b><i>信任</i></span>`
+    + `<span><b>${escapeHtml(user.familiarity)}</b><i>熟悉</i></span>`
+    + `</div>`;
+  const boundary = user.boundary === "开放"
+    ? '<span class="badge safe">开放</span>'
+    : '<span class="badge warn">谨慎</span>';
+  return `<tr class="relationship-data-row${expanded ? " is-expanded" : ""}"`
+    + ` data-relation-index="${index}" data-relationship-key="${escapeHtml(relationshipDeleteKey(user))}">`
+    + `<td data-label="自然人"><div class="relation-person">`
+    + `<strong>${escapeHtml(user.display_name || user.user_id || "未命名")}</strong>${identityHint}</div></td>`
+    + `<td data-label="关系性质">${typeCell}</td>`
+    + `<td data-label="层级"><div class="relation-band">`
+    + `<span class="band-chip">${escapeHtml(user.band)}</span>${scores}</div></td>`
+    + `<td data-label="最近互动"><span class="relation-time">${formatTime(user.last_event_at)}</span></td>`
+    + `<td data-label="边界状态"><div class="relation-state">${boundary}`
+    + `<div class="row-actions">`
+    + `<button type="button" class="quick-edit-command" data-quick-edit="${index}">${actionLabel}</button>`
+    + `<button type="button" class="relation-toggle-command" data-relation-toggle="${index}"`
+    + ` aria-expanded="${expanded ? "true" : "false"}"`
+    + ` aria-label="${expanded ? "收起详情" : "展开详情"}" title="${expanded ? "收起详情" : "展开详情"}">`
+    + `${expanded ? "收起" : "详情"}</button>`
+    + `</div></div></td></tr>`;
+}
+
 function renderRelationshipTable(users) {
   const query = relationshipQuery.trim().toLowerCase();
-  let filtered = users.filter((user) => {
-    if (relationshipBandFilter && user.band !== relationshipBandFilter) return false;
-    if (!query) return true;
-    return `${user.display_name || ""} ${user.user_id || ""} ${user.person_id || ""} ${user.orphaned_person_id || ""}`
-      .toLowerCase()
-      .includes(query);
-  });
+  let filtered = users.filter((user) => relationshipMatchesFilters(user, query));
   filtered = sortRelationshipRows(filtered, relationshipSort);
   const visible = filtered.slice(0, relationshipVisible);
   const countElement = $("#relation-count");
   if (countElement) countElement.textContent = `共 ${filtered.length} 条`;
   const tbody = $("#relation-tbody");
+  if (!tbody) return;
   if (!filtered.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">没有匹配的关系记录，换个关键词或层级试试</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">没有匹配的关系记录，换个关键词或筛选条件试试</td></tr>';
     updateRelationshipProgressive(0, 0);
     return;
   }
 
   tbody.innerHTML = visible.map((user) => {
     const index = overviewUsers.indexOf(user);
-    const orphaned = Boolean(user.orphaned_person_id);
-    const actionLabel = user.person_id ? "编辑归属" : (orphaned ? "处理历史关系" : "快速归属");
-    const deletePending = pendingRelationshipDeleteKey === relationshipDeleteKey(user);
     const profiles = relationshipDeleteProfiles(user);
-    const multipleProfiles = profiles.length > 1;
-    const deleteConfirmation = deletePending && multipleProfiles
-      ? relationshipDeleteProfilePicker(profiles, pendingRelationshipDeleteProfileId)
-      : "";
-    const profileMarkup = profiles.map((profileId) => {
-      const label = profileId === "default"
-        ? "默认人格"
-        : (profileId.startsWith("auto-") ? `自动 · ${profileId.slice(-4)}` : `自定义人格 · ${String(profileId).slice(-4)}`);
-      return `<code class="profile-id" title="${escapeHtml(profileId)}">${escapeHtml(label)}</code>`;
-    }).join("");
-    const currentType = relationshipTypeLabels[user.relationship_type] ? user.relationship_type : "friend";
-    const typeOptions = relationshipTypeOptions.map(([value, label]) => (
-      `<option value="${value}"${value === currentType ? " selected" : ""}>${label}</option>`
-    )).join("");
-    const typeCell = orphaned
-      ? escapeHtml(relationshipTypeLabels[currentType])
-      : `<select class="relationship-type-select" data-set-type="${index}"`
-        + ` aria-label="关系性质">${typeOptions}</select>`;
-    const identityHint = (orphaned
-      ? `<small class="user-id">待重新归属的历史关系</small>`
-      : (user.display_name
-        ? `<small class="user-id">${escapeHtml(user.user_id)} · ${user.linked_accounts} 个账号</small>`
-        : ""))
-      + (user.person_id
-        ? `<span class="person-id-line">${idChip(user.person_id, "自然人 ID")}</span>`
-        : (orphaned ? `<span class="person-id-line">${idChip(user.orphaned_person_id, "历史自然人 ID")}</span>` : ""));
-    const confirmationRow = deleteConfirmation
-      ? `<tr class="relationship-detail-row"><td colspan="12">${deleteConfirmation}</td></tr>`
-      : "";
-    return (`<tr class="relationship-data-row"><td data-label="用户">${escapeHtml(user.display_name || user.user_id)}`
-    + `${identityHint}</td>`
-    + `<td data-label="关系人格"><span class="profile-stack">${profileMarkup}</span></td>`
-    + `<td data-label="关系层级">${escapeHtml(user.band)}</td>`
-    + `<td data-label="关系性质">${typeCell}</td>`
-    + `<td data-label="好感">${user.affinity}</td><td data-label="信任">${user.trust}</td>`
-    + `<td data-label="熟悉度">${user.familiarity}</td><td data-label="互动">${user.interaction_count}</td>`
-    + `<td data-label="白名单">${user.whitelisted ? '<span class="badge ok">白名单</span>' : '<span class="badge">普通</span>'}</td>`
-    + `<td data-label="边界">${user.boundary === "开放" ? '<span class="badge safe">开放</span>' : '<span class="badge warn">谨慎</span>'}</td>`
-    + `<td data-label="最后互动">${formatTime(user.last_event_at)}</td>`
-    + `<td data-label="操作"><div class="row-actions"><button type="button" class="quick-edit-command" data-quick-edit="${index}">`
-    + `${actionLabel}</button><button type="button" class="relationship-delete-command danger-command" `
-    + `data-delete-relationship="${index}" data-confirmed="${deletePending ? "true" : "false"}"`
-    + ` data-awaiting-profile="${deletePending && multipleProfiles && !pendingRelationshipDeleteProfileId ? "true" : "false"}"`
-    + `${deletePending && multipleProfiles && !pendingRelationshipDeleteProfileId ? " disabled" : ""}>`
-    + `${deletePending ? (multipleProfiles ? "确认删除所选人格" : "确认删除关系") : "删除关系"}`
-    + `</button></div></td></tr>${confirmationRow}`);
+    const key = relationshipDeleteKey(user);
+    const expanded = expandedRelationshipKeys.has(key);
+    const deletePending = pendingRelationshipDeleteKey === key;
+    const mainRow = relationshipMainRow(user, index, profiles, expanded, deletePending);
+    if (!expanded) return mainRow;
+    return mainRow
+      + '<tr class="relationship-detail-row"><td colspan="5">'
+      + relationshipDetailMarkup(user, index, profiles, deletePending)
+      + '</td></tr>';
   }).join("");
   updateRelationshipProgressive(filtered.length, visible.length);
+}
+
+function toggleRelationshipDetail(index) {
+  const user = overviewUsers[index];
+  if (!user) return;
+  const key = relationshipDeleteKey(user);
+  if (expandedRelationshipKeys.has(key)) expandedRelationshipKeys.delete(key);
+  else expandedRelationshipKeys.add(key);
+  renderRelationshipTable(overviewUsers);
 }
 
 async function load() {
@@ -353,14 +484,13 @@ async function load() {
     button.textContent = "刷新中…";
   }
   try {
-    relationshipVisible = relationshipPageSize;
-    relationshipQuery = "";
+    relationshipVisible = relationshipPageSize();
     render(await apiGet("overview"));
     lastLoadedAt = Date.now();
     updateFreshness();
   } catch (error) {
     notify(`加载关系状态失败：${error?.message || String(error)}`, true);
-    $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="12">加载失败，请稍后重试</td></tr>';
+    $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="5">加载失败，请稍后重试</td></tr>';
     updateFreshness(true);
   } finally {
     if (button) {
@@ -404,36 +534,71 @@ function renderConfigField(key, field, value) {
     `${hint ? `<span class="config-hint" id="${hintId}">${hint}</span>` : ""}</div></div>`;
 }
 
+function configGroupMarkup(title, fields) {
+  const open = openConfigGroups.has(title) ? " open" : "";
+  return `<details class="config-group si-disclosure" data-config-group="${escapeHtml(title)}"${open}>`
+    + `<summary><span class="config-group-title">${escapeHtml(title)}</span>`
+    + `<span class="config-group-count">${fields.length} 项</span></summary>`
+    + `${fields.join("")}</details>`;
+}
+
 function renderConfigForm(schema, config) {
   const form = $("#config-form");
   if (!form) return;
   const used = new Set();
-  const sections = CONFIG_GROUPS.map((group) => {
+  const groups = [];
+  CONFIG_GROUPS.forEach((group) => {
     const fields = Object.entries(schema)
       .filter(([key]) => key.startsWith(group.prefix) && !used.has(key))
       .map(([key, field]) => {
         used.add(key);
         return renderConfigField(key, field, config[key]);
       });
-    if (!fields.length) return "";
-    const open = group.title === "情绪追踪" ? " open" : "";
-    return `<details class="config-group si-disclosure"${open}><summary>${escapeHtml(group.title)}</summary>${fields.join("")}</details>`;
-  }).join("");
+    if (fields.length) groups.push(configGroupMarkup(group.title, fields));
+  });
 
   const remaining = Object.entries(schema)
     .filter(([key]) => !used.has(key))
     .map(([key, field]) => renderConfigField(key, field, config[key]));
-  const extra = remaining.length
-    ? `<details class="config-group si-disclosure"><summary>其他</summary>${remaining.join("")}</details>`
-    : "";
+  if (remaining.length) groups.push(configGroupMarkup("其他", remaining));
 
-  form.innerHTML = (sections + extra || "<p class=\"config-loading\">无可配置项</p>") +
+  form.innerHTML = (groups.join("") || "<p class=\"config-loading\">无可配置项</p>") +
     '<p id="config-filter-empty" class="config-loading" hidden>没有匹配的配置项</p>';
+  form.querySelectorAll("details.config-group").forEach((group) => {
+    group.addEventListener("toggle", () => {
+      if (group.open) openConfigGroups.add(group.dataset.configGroup);
+      else openConfigGroups.delete(group.dataset.configGroup);
+    });
+  });
   updateConfigDirtyState();
+  updateConfigFoldButton();
   applyConfigFilter();
 }
 
+function configGroups() {
+  return [...document.querySelectorAll("#config-form details.config-group")];
+}
+
+function updateConfigFoldButton() {
+  const button = $("#btn-config-fold");
+  if (!button) return;
+  const groups = configGroups();
+  const allOpen = groups.length > 0 && groups.every((group) => group.open);
+  button.dataset.configFold = allOpen ? "collapse" : "expand";
+  button.textContent = allOpen ? "收起全部" : "展开全部";
+}
+
+function setAllConfigGroups(open) {
+  configGroups().forEach((group) => {
+    if (group.open !== open) group.open = open;
+    if (open) openConfigGroups.add(group.dataset.configGroup);
+    else openConfigGroups.delete(group.dataset.configGroup);
+  });
+  updateConfigFoldButton();
+}
+
 let configOnlyChanged = false;
+const openConfigGroups = new Set();
 
 function fieldValueFromElement(el) {
   if (!el || !el.dataset || !el.dataset.key) return undefined;
@@ -498,6 +663,7 @@ function applyConfigFilter() {
   });
   const empty = $("#config-filter-empty");
   if (empty) empty.hidden = visibleFields > 0;
+  updateConfigFoldButton();
 }
 
 async function loadConfig() {
@@ -727,9 +893,9 @@ function identitySheetMedia() {
 }
 
 function openIdentityEditorSheet() {
-  if (!identitySheetMedia() || identityEditorDialog?.isOpen()) return;
+  if (!identitySheetMedia() || identityEditorDialog?.isOpen()) return false;
   const editor = document.querySelector(".identity-editor");
-  if (!editor) return;
+  if (!editor) return false;
   const parent = editor.parentElement;
   const next = editor.nextSibling;
   const body = document.createElement("div");
@@ -738,6 +904,7 @@ function openIdentityEditorSheet() {
     title: "编辑自然人",
     body,
     width: "min(760px, 100%)",
+    className: "identity-editor-dialog",
     bodyClassName: "identity-editor-sheet",
     actions: [{ id: "close", label: "关闭", variant: "primary" }],
     onClose: () => {
@@ -746,6 +913,7 @@ function openIdentityEditorSheet() {
       identityEditorDialog = null;
     },
   });
+  return true;
 }
 
 function closeIdentityEditorSheet() {
@@ -1089,18 +1257,15 @@ async function deleteIdentity(personId, button) {
   }
 }
 
-function clearRelationshipDeleteConfirmation() {
+function clearRelationshipDeleteConfirmation(rerender = true) {
   pendingRelationshipDeleteKey = "";
   pendingRelationshipDeleteProfileId = "";
   clearTimeout(pendingRelationshipDeleteTimer);
   pendingRelationshipDeleteTimer = null;
   document.querySelectorAll("[data-relationship-delete-confirmation]").forEach((element) => element.remove());
-  document.querySelectorAll("[data-delete-relationship]").forEach((button) => {
-    button.disabled = false;
-    button.dataset.confirmed = "false";
-    button.dataset.awaitingProfile = "false";
-    button.textContent = "删除关系";
-  });
+  document.querySelectorAll("[data-delete-confirmation-row]").forEach((element) => element.remove());
+  document.querySelectorAll("[data-cancel-delete-relationship]").forEach((element) => element.remove());
+  if (rerender) renderRelationshipTable(overviewUsers);
 }
 
 function expireRelationshipDeleteConfirmation() {
@@ -1109,25 +1274,16 @@ function expireRelationshipDeleteConfirmation() {
   notify("删除关系确认已取消，请重新选择要删除的人格");
 }
 
-function armRelationshipDelete(index, button) {
+function armRelationshipDelete(index) {
   const user = overviewUsers[index];
   if (!user) return;
   const profiles = relationshipDeleteProfiles(user);
   const multipleProfiles = profiles.length > 1;
-  clearRelationshipDeleteConfirmation();
+  clearRelationshipDeleteConfirmation(false);
   pendingRelationshipDeleteKey = relationshipDeleteKey(user);
-  button.dataset.confirmed = "true";
-  button.textContent = multipleProfiles ? "确认删除所选人格" : "确认删除关系";
-  if (multipleProfiles) {
-    button.disabled = true;
-    button.dataset.awaitingProfile = "true";
-    const dataRow = button.closest("tr");
-    dataRow?.insertAdjacentHTML(
-      "afterend",
-      `<tr class="relationship-detail-row"><td colspan="12">${relationshipDeleteProfilePicker(profiles)}</td></tr>`,
-    );
-  }
+  pendingRelationshipDeleteProfileId = "";
   pendingRelationshipDeleteTimer = setTimeout(expireRelationshipDeleteConfirmation, 8000);
+  renderRelationshipTable(overviewUsers);
   notify(multipleProfiles
     ? "请选择一个关系人格，再次点击“确认删除所选人格”；本次不会改动其他人格"
     : `请在 8 秒内再次点击“确认删除关系”；本次只删除人格“${profiles[0]}”的关系记录，白名单设置不变`);
@@ -1191,8 +1347,10 @@ async function deleteRelationship(index, button) {
     payload.user_id = user.user_id || "";
   }
   // Before sending the request, clear the timer and cancel control so a slow
-  // persistence operation cannot report a false cancel.
+  // persistence operation cannot report a false cancel. The row is re-rendered
+  // by that reset, so re-resolve the live confirm button before showing busy.
   clearRelationshipDeleteConfirmation();
+  button = document.querySelector(`[data-delete-relationship="${index}"]`) || button;
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
   button.textContent = "删除中…";
@@ -1208,7 +1366,10 @@ async function deleteRelationship(index, button) {
 
 function initIdentityEditor() {
   resetIdentityEditor();
-  $("#btn-new-person").addEventListener("click", () => { resetIdentityEditor(); openIdentityEditorSheet(); });
+  $("#btn-new-person").addEventListener("click", () => {
+    resetIdentityEditor();
+    if (!openIdentityEditorSheet()) scrollToIdentityEditor();
+  });
   $("#btn-cancel-person").addEventListener("click", () => { closeIdentityEditorSheet(); resetIdentityEditor(); });
   $("#btn-add-account").addEventListener("click", () => {
     $("#account-list").insertAdjacentHTML("beforeend", accountRow());
@@ -1287,21 +1448,55 @@ function bindPageEvents() {
     const row = event.target.closest("[data-band]");
     if (!row) return;
     relationshipBandFilter = row.dataset.band || "";
-    relationshipVisible = relationshipPageSize;
+    relationshipVisible = relationshipPageSize();
     const select = $("#relation-band-filter");
     if (select) select.value = relationshipBandFilter;
     activateTab("details");
     renderRelationshipTable(overviewUsers);
   });
+  const onRelationshipFilterChange = () => {
+    relationshipVisible = relationshipPageSize();
+    renderRelationshipTable(overviewUsers);
+  };
   $("#relation-band-filter")?.addEventListener("change", (event) => {
     relationshipBandFilter = event.target.value;
-    relationshipVisible = relationshipPageSize;
-    renderRelationshipTable(overviewUsers);
+    onRelationshipFilterChange();
+  });
+  $("#relation-type-filter")?.addEventListener("change", (event) => {
+    relationshipTypeFilter = event.target.value;
+    onRelationshipFilterChange();
+  });
+  $("#relation-profile-filter")?.addEventListener("change", (event) => {
+    relationshipProfileFilter = event.target.value;
+    onRelationshipFilterChange();
+  });
+  $("#relation-whitelist-filter")?.addEventListener("change", (event) => {
+    relationshipWhitelistFilter = event.target.value;
+    onRelationshipFilterChange();
+  });
+  $("#relation-boundary-filter")?.addEventListener("change", (event) => {
+    relationshipBoundaryFilter = event.target.value;
+    onRelationshipFilterChange();
   });
   $("#relation-sort")?.addEventListener("change", (event) => {
     relationshipSort = event.target.value;
-    relationshipVisible = relationshipPageSize;
+    onRelationshipFilterChange();
+  });
+  $("#btn-relation-reset")?.addEventListener("click", () => {
+    clearRelationshipDeleteConfirmation();
+    relationshipQuery = "";
+    relationshipBandFilter = "";
+    relationshipTypeFilter = "";
+    relationshipProfileFilter = "";
+    relationshipWhitelistFilter = "";
+    relationshipBoundaryFilter = "";
+    relationshipSort = "default";
+    const search = $("#relation-search");
+    if (search) search.value = "";
+    populateRelationshipFilters();
+    relationshipVisible = relationshipPageSize();
     renderRelationshipTable(overviewUsers);
+    notify("已重置关系明细的搜索与筛选");
   });
   $("#identity-search")?.addEventListener("input", (event) => {
     identityQuery = event.target.value;
@@ -1314,13 +1509,18 @@ function bindPageEvents() {
   window.setInterval(updateFreshness, 15000);
   $("#relation-search")?.addEventListener("input", (event) => {
     relationshipQuery = event.target.value;
-    relationshipVisible = relationshipPageSize;
+    relationshipVisible = relationshipPageSize();
     renderRelationshipTable(overviewUsers);
   });
   $("#relation-progressive")?.addEventListener("click", (event) => {
-    if (event.target.closest("[data-relation-more]")) relationshipVisible += relationshipPageSize;
-    else if (event.target.closest("[data-relation-collapse]")) relationshipVisible = relationshipPageSize;
+    if (event.target.closest("[data-relation-more]")) relationshipVisible += relationshipPageSize();
+    else if (event.target.closest("[data-relation-collapse]")) relationshipVisible = relationshipPageSize();
     else return;
+    renderRelationshipTable(overviewUsers);
+  });
+  const narrowQuery = window.matchMedia("(max-width: 760px)");
+  narrowQuery.addEventListener?.("change", () => {
+    relationshipVisible = relationshipPageSize();
     renderRelationshipTable(overviewUsers);
   });
   initIdentityEditor();
@@ -1331,6 +1531,9 @@ function bindPageEvents() {
   $("#config-only-changed").addEventListener("change", (event) => {
     configOnlyChanged = event.target.checked;
     applyConfigFilter();
+  });
+  $("#btn-config-fold").addEventListener("click", (event) => {
+    setAllConfigGroups(event.currentTarget.dataset.configFold !== "collapse");
   });
   const configForm = $("#config-form");
   const onConfigFieldChange = () => {
@@ -1358,6 +1561,11 @@ function bindPageEvents() {
     }
   });
   $("#relation-tbody").addEventListener("click", (event) => {
+    const toggleButton = event.target.closest("[data-relation-toggle]");
+    if (toggleButton) {
+      toggleRelationshipDetail(Number(toggleButton.dataset.relationToggle));
+      return;
+    }
     const cancelButton = event.target.closest("[data-cancel-delete-relationship]");
     if (cancelButton) {
       clearRelationshipDeleteConfirmation();
@@ -1370,12 +1578,19 @@ function bindPageEvents() {
       if (deleteButton.dataset.confirmed === "true") {
         deleteRelationship(index, deleteButton);
       } else {
-        armRelationshipDelete(index, deleteButton);
+        armRelationshipDelete(index);
       }
       return;
     }
     const editButton = event.target.closest("[data-quick-edit]");
-    if (editButton) quickEditRelationship(Number(editButton.dataset.quickEdit));
+    if (editButton) {
+      quickEditRelationship(Number(editButton.dataset.quickEdit));
+      return;
+    }
+    const dataRow = event.target.closest("tr.relationship-data-row");
+    if (!dataRow) return;
+    if (event.target.closest("button, select, input, textarea, a, label, [data-copy-id]")) return;
+    toggleRelationshipDetail(Number(dataRow.dataset.relationIndex));
   });
 }
 
@@ -1406,7 +1621,7 @@ async function init() {
 
 init().catch((error) => {
   notify(`页面启动失败：${error?.message || String(error)}`, true);
-  $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="12">页面启动失败</td></tr>';
+  $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="5">页面启动失败</td></tr>';
   const configForm = $("#config-form");
   if (configForm) configForm.innerHTML = '<p class="config-loading">页面启动失败，无法加载配置</p>';
   const identityList = $("#identity-list");

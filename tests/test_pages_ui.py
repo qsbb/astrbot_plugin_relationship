@@ -95,7 +95,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertNotIn("relationship_profile_ids: profiles", self.js)
         self.assertIn("button.disabled = true", self.js)
         self.assertIn("deleteButton.disabled = !picker.value", self.js)
-        self.assertIn('button.dataset.awaitingProfile = "true"', self.js)
+        self.assertIn("const awaitingProfile = deletePending && multipleProfiles", self.js)
+        self.assertIn('data-awaiting-profile="${awaitingProfile ? "true" : "false"}"', self.js)
         self.assertIn('[data-awaiting-profile="true"]:disabled', self.css)
         self.assertIn("本次只删除所选人格", self.js)
         for forbidden_copy in ("删除全部关系", "删除所有关系人格", "一次删除全部"):
@@ -153,8 +154,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("user.relationship_profile_id", self.js)
         self.assertIn("user.relationship_profile_ids", self.js)
         self.assertIn('class="profile-stack"', self.js)
-        self.assertIn('colspan="12"', self.html)
-        self.assertIn('colspan="12"', self.js)
+        self.assertIn('colspan="5"', self.html)
+        self.assertIn('colspan="5"', self.js)
 
     def test_overview_has_relationship_type_editor(self) -> None:
         """关系性质列：下拉框编辑 + relationship-type API。"""
@@ -172,14 +173,66 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn('["close_friend", "挚友"]', self.js)
 
     def test_overview_table_has_matching_columns(self) -> None:
-        """布局修复：colgroup 与 thead 列数一致（都含关系性质列）。"""
+        """方案 A：主行 5 列，colgroup 与 thead 一致。"""
         self.assertIn('class="relation-col-type"', self.html)
-        self.assertIn('<th scope="col">关系性质</th>', self.html)
-        self.assertIn('colspan="12"', self.html)
-        self.assertIn('colspan="12"', self.js)
+        for column in ("relation-col-user", "relation-col-type", "relation-col-band",
+                       "relation-col-time", "relation-col-state"):
+            self.assertIn(f'class="{column}"', self.html)
+        for header in ("自然人", "关系性质", "层级", "最近互动", "边界状态"):
+            self.assertIn(f'<th scope="col">{header}</th>', self.html)
+        self.assertEqual(self.html.count("<col class=\"relation-col-"), 5)
+        self.assertEqual(self.html.count('<th scope="col">'), 5)
+        self.assertIn('colspan="5"', self.html)
+        self.assertIn('colspan="5"', self.js)
+
+    def test_details_main_row_has_five_labeled_cells(self) -> None:
+        """主行只放决策必需信息：5 列 data-label 与表头一一对应。"""
+        for label in ("自然人", "关系性质", "层级", "最近互动", "边界状态"):
+            self.assertIn(f'data-label="{label}"', self.js)
+        self.assertIn("function relationshipMainRow(", self.js)
+        self.assertIn("function relationshipDetailMarkup(", self.js)
+
+    def test_details_rows_expand_secondary_fields(self) -> None:
+        """点击主行/详情按钮展开次要字段，删除关系收进展开区。"""
+        self.assertIn("const expandedRelationshipKeys = new Set();", self.js)
+        self.assertIn("function toggleRelationshipDetail(", self.js)
+        self.assertIn('data-relation-toggle="${index}"', self.js)
+        self.assertIn('aria-expanded="${expanded ? "true" : "false"}"', self.js)
+        self.assertIn("expandedRelationshipKeys.has(key)", self.js)
+        self.assertIn("人格", self.js)
+        self.assertIn("互动", self.js)
+        self.assertIn("白名单", self.js)
+        self.assertIn("范围", self.js)
+        self.assertIn("toggleRelationshipDetail(Number(dataRow.dataset.relationIndex))", self.js)
+        self.assertIn('event.target.closest("button, select, input, textarea, a, label, [data-copy-id]")', self.js)
+
+    def test_details_filters_cover_every_dimension(self) -> None:
+        """搜索 + 层级 / 关系性质 / 人格 / 白名单 / 边界筛选。"""
+        for control in ("relation-search", "relation-band-filter", "relation-type-filter",
+                        "relation-profile-filter", "relation-whitelist-filter",
+                        "relation-boundary-filter", "relation-sort"):
+            self.assertIn(f'id="{control}"', self.html)
+        self.assertIn('id="btn-relation-reset"', self.html)
+        for state in ("relationshipTypeFilter", "relationshipProfileFilter",
+                      "relationshipWhitelistFilter", "relationshipBoundaryFilter"):
+            self.assertIn(f"let {state} = \"\";", self.js)
+        self.assertIn("function relationshipMatchesFilters(user, query)", self.js)
+        self.assertIn("function populateRelationshipFilters()", self.js)
+        self.assertIn('relationshipWhitelistFilter === "no"', self.js)
+        self.assertIn("relationshipBoundaryFilter && user.boundary !== relationshipBoundaryFilter", self.js)
+        self.assertIn("relationshipDeleteProfiles(user).includes(relationshipProfileFilter)", self.js)
+
+    def test_details_progressive_display_matches_viewport(self) -> None:
+        """桌面 20 条、移动端 10 条渐进显示，刷新重置分页。"""
+        self.assertIn("function relationshipPageSize()", self.js)
+        self.assertIn('window.matchMedia("(max-width: 760px)").matches ? 10 : 20', self.js)
+        self.assertIn("relationshipVisible = relationshipPageSize();", self.js)
+        self.assertIn("relationshipVisible += relationshipPageSize();", self.js)
+        self.assertIn('data-relation-more', self.js)
+        self.assertIn('data-relation-collapse', self.js)
 
     def test_overview_has_quick_identity_editor(self) -> None:
-        self.assertIn('<th scope="col">操作</th>', self.html)
+        self.assertIn("边界状态", self.html)
         self.assertIn('data-quick-edit="${index}"', self.js)
         self.assertIn("async function quickEditRelationship(", self.js)
         self.assertIn('activateTab("identities")', self.js)
@@ -214,8 +267,10 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("只有白名单关系可以调整", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.12.2", self.html)
-        self.assertIn("app.js?v=0.12.2", self.html)
+        self.assertIn("style.css?v=0.12.3-1", self.html)
+        self.assertIn("series-ui.css?v=0.12.3-1", self.html)
+        self.assertIn("series-ui.js?v=0.12.3-1", self.html)
+        self.assertIn("app.js?v=0.12.3-1", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)
@@ -253,7 +308,7 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("content: attr(data-label)", self.css)
         self.assertNotIn("overflow-x: scroll", self.css)
         self.assertNotIn("min-width: 1010px", self.css)
-        self.assertIn('data-label="最后互动"', self.js)
+        self.assertIn('data-label="最近互动"', self.js)
         self.assertIn("relationship-detail-row", self.js)
 
     def test_init_loads_sections_in_parallel(self) -> None:
@@ -288,8 +343,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("clearTimeout(timer);", self.js)
 
     def test_table_headers_have_scope(self) -> None:
-        self.assertIn('<th scope="col">用户</th>', self.html)
-        self.assertNotIn("<th>用户</th>", self.html)
+        self.assertIn('<th scope="col">自然人</th>', self.html)
+        self.assertNotIn("<th>自然人</th>", self.html)
 
     def test_overview_shows_relation_count(self) -> None:
         self.assertIn('id="relation-count"', self.html)
@@ -350,11 +405,54 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn('title="${escapeHtml(profileId)}"', self.js)
 
 
+    def test_identity_tab_uses_master_detail_and_mobile_sheet(self) -> None:
+        """账号归属：桌面列表 + 编辑器同屏，移动端编辑器收进全屏 sheet。"""
+        self.assertIn(".identity-grid", self.css)
+        self.assertIn("@media (min-width: 901px)", self.css)
+        self.assertIn("max-height: min(54vh, 640px)", self.css)
+        self.assertIn("overflow-y: auto", self.css)
+        self.assertIn("#panel-identities .identity-grid > .identity-editor { display: none; }", self.css)
+        self.assertIn(".identity-editor-dialog", self.css)
+        self.assertIn("position: fixed;", self.css)
+        self.assertIn('className: "identity-editor-dialog"', self.js)
+        self.assertIn("if (!identitySheetMedia() || identityEditorDialog?.isOpen()) return false;", self.js)
+        self.assertIn("if (!openIdentityEditorSheet()) scrollToIdentityEditor();", self.js)
+
+    def test_settings_use_collapsible_groups_and_sticky_save_bar(self) -> None:
+        """设置：分组折叠 + sticky 保存栏 + 未保存数量提示。"""
+        self.assertIn('id="btn-config-fold"', self.html)
+        self.assertIn('class="settings-sticky"', self.html)
+        self.assertIn('id="config-dirty-count"', self.html)
+        self.assertIn('id="btn-save-config"', self.html)
+        self.assertIn("function configGroupMarkup(", self.js)
+        self.assertIn("const openConfigGroups = new Set();", self.js)
+        self.assertIn("function setAllConfigGroups(", self.js)
+        self.assertIn("function updateConfigFoldButton(", self.js)
+        self.assertIn("config-group-count", self.js)
+        self.assertIn("openConfigGroups.has(title) ? \" open\" : \"\"", self.js)
+        self.assertIn("#panel-settings .settings-sticky", self.css)
+        self.assertIn("position: sticky;", self.css)
+        self.assertIn(".config-group-title::before", self.css)
+        self.assertIn(".config-group-body", self.css)
+
+    def test_details_density_is_relaxed(self) -> None:
+        """密度：主行 5 列、字号层级拉开，副信息收进展开区。"""
+        self.assertIn(".relation-person strong", self.css)
+        self.assertIn("font-size: 15px;", self.css)
+        self.assertIn("font-size: 12.5px;", self.css)
+        self.assertIn("padding: 15px 14px;", self.css)
+        self.assertIn(".relation-detail", self.css)
+        self.assertIn(".detail-chip", self.css)
+        self.assertIn("relationshipVisible = relationshipPageSize();", self.js)
+
     def test_multi_profile_delete_confirmation_uses_full_width_row(self) -> None:
+        # 多人格删除：确认区整行渲染在展开详情里，选择人格前确认按钮保持禁用
         self.assertNotIn('button.closest(".row-actions")?.insertAdjacentHTML', self.js)
-        self.assertIn('const dataRow = button.closest("tr");', self.js)
-        self.assertIn('<tr class="relationship-detail-row"><td colspan="12">', self.js)
-        self.assertIn(".relationship-detail-row .relationship-delete-confirmation", self.css)
+        self.assertIn('const picker = deletePending && multipleProfiles', self.js)
+        self.assertIn('relationshipDeleteProfilePicker(profiles, pendingRelationshipDeleteProfileId)', self.js)
+        self.assertIn('<tr class="relationship-detail-row"><td colspan="5">', self.js)
+        self.assertIn(".relationship-delete-confirmation", self.css)
+        self.assertIn("flex: 1 1 100%", self.css)
 
 
 if __name__ == "__main__":

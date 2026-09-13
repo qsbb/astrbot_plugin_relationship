@@ -4,14 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-情 · 关系状态</title>
-  <link rel="stylesheet" href="./style.css?v=0.12.2-1" />
-  <link rel="stylesheet" href="./series-ui.css?v=0.12.2-1" />
+  <link rel="stylesheet" href="./style.css?v=0.12.3-1" />
+  <link rel="stylesheet" href="./series-ui.css?v=0.12.3-1" />
   </head>
 <body data-series-ui="1">
   <p data-toast-fallback role="alert" hidden style="margin:12px; padding:10px 12px; border:1px solid rgba(209,75,90,.35); border-radius:10px; color:#a33; background:#fff0f2;"></p>
   <main class="shell">
     <header class="hero">
-      <div>
+      <div class="hero-copy">
         <p class="eyebrow">AstrBot 插件管理页</p>
         <h1>凝心溯溪-情</h1>
         <p>关系分层、好感分布、信任门槛与边界状态可视化</p>
@@ -54,62 +54,75 @@
           <div><span>白名单人数</span><strong data-policy="whitelist_count">—</strong></div>
         </div>
       </article>
-        <details class="si-disclosure relation-logic-disclosure">
-          <summary>为什么这样划分</summary>
-          <div class="logic-list">
-            <div><span class="series-key">1</span><p>普通互动只缓慢形成熟悉和朋友关系，不自动转化为依赖型高好感。</p></div>
-            <div><span class="series-key">2</span><p>进入高好感需要白名单，并同时满足信任与熟悉度门槛。</p></div>
-            <div><span class="series-key">3</span><p>条件不足时继续保持边界，不因聊天频率高而取消谨慎。</p></div>
-          </div>
-        </details>
 
+      <details class="si-disclosure relation-logic-disclosure">
+        <summary>为什么这样划分</summary>
+        <div class="logic-list">
+          <div><span class="series-key">1</span><p>普通互动只缓慢形成熟悉和朋友关系，不自动转化为依赖型高好感。</p></div>
+          <div><span class="series-key">2</span><p>进入高好感需要白名单，并同时满足信任与熟悉度门槛。</p></div>
+          <div><span class="series-key">3</span><p>条件不足时继续保持边界，不因聊天频率高而取消谨慎。</p></div>
+        </div>
+      </details>
 
       <div class="visual-grid">
         <article class="card chart-card">
           <div class="section-heading">
-            <div><h2>好感关系分布</h2><p>按当前关系层级统计人数</p></div>
+            <div><h2>好感关系分布</h2><p>按当前关系层级统计人数，点击可跳到对应明细</p></div>
             <span class="pill">人数</span>
           </div>
           <div id="band-chart" class="band-chart"></div>
         </article>
       </div>
-
     </section>
 
     <section id="panel-details" class="panel" role="tabpanel" aria-labelledby="tab-details" data-panel="details">
-      <div class="si-filter-bar">
-        <label class="control"><span>搜索</span><input id="relation-search" type="search" placeholder="显示名称、QQ、用户 ID、自然人 ID" /></label>
-        <label class="control"><span>关系层级</span><select id="relation-band-filter"><option value="">全部层级</option></select></label>
-        <label class="control"><span>排序</span><select id="relation-sort">
-          <option value="default">默认顺序</option>
-          <option value="affinity">好感从高到低</option>
-          <option value="trust">信任从高到低</option>
-          <option value="familiarity">熟悉度从高到低</option>
-          <option value="interaction">互动次数从高到低</option>
-          <option value="recent">最后互动从近到远</option>
-        </select></label>
+      <div class="card filter-card">
+        <div class="si-filter-bar relation-filters">
+          <label class="control control-search"><span>搜索</span><input id="relation-search" type="search" placeholder="显示名称、QQ、用户 ID、自然人 ID" /></label>
+          <label class="control"><span>关系层级</span><select id="relation-band-filter"><option value="">全部层级</option></select></label>
+          <label class="control"><span>关系性质</span><select id="relation-type-filter"><option value="">全部性质</option></select></label>
+          <label class="control"><span>关系人格</span><select id="relation-profile-filter"><option value="">全部人格</option></select></label>
+          <label class="control"><span>白名单</span><select id="relation-whitelist-filter">
+            <option value="">全部</option>
+            <option value="yes">白名单</option>
+            <option value="no">普通</option>
+          </select></label>
+          <label class="control"><span>边界</span><select id="relation-boundary-filter">
+            <option value="">全部</option>
+            <option value="开放">开放</option>
+            <option value="谨慎">谨慎</option>
+          </select></label>
+          <label class="control"><span>排序</span><select id="relation-sort">
+            <option value="default">默认顺序</option>
+            <option value="affinity">好感从高到低</option>
+            <option value="trust">信任从高到低</option>
+            <option value="familiarity">熟悉度从高到低</option>
+            <option value="interaction">互动次数从高到低</option>
+            <option value="recent">最后互动从近到远</option>
+          </select></label>
+          <button id="btn-relation-reset" type="button" class="ghost-link relation-reset">重置筛选</button>
+        </div>
       </div>
+
       <article class="card table-card">
         <div class="section-heading">
-          <div><h2>关系明细</h2><p>状态由事件规则计算，页面不提供直接改分入口。</p></div>
+          <div>
+            <h2>关系明细</h2>
+            <p>主行只放决策必需信息；人格、互动、白名单与边界收进展开详情。</p>
+          </div>
           <span class="pill" id="relation-count" aria-live="polite">—</span>
         </div>
         <div class="table-wrap">
           <table class="relationship-table">
             <colgroup>
               <col class="relation-col-user" />
-              <col class="relation-col-profile" />
-              <col class="relation-col-band" />
               <col class="relation-col-type" />
-              <col class="relation-col-score" span="2" />
-              <col class="relation-col-familiarity" />
-              <col class="relation-col-interactions" />
-              <col class="relation-col-state" span="2" />
+              <col class="relation-col-band" />
               <col class="relation-col-time" />
-              <col class="relation-col-actions" />
+              <col class="relation-col-state" />
             </colgroup>
-            <thead><tr><th scope="col">用户</th><th scope="col">关系人格</th><th scope="col">关系层级</th><th scope="col">关系性质</th><th scope="col">好感</th><th scope="col">信任</th><th scope="col">熟悉度</th><th scope="col">互动</th><th scope="col">白名单</th><th scope="col">边界</th><th scope="col">最后互动</th><th scope="col">操作</th></tr></thead>
-            <tbody id="relation-tbody"><tr class="empty-row"><td colspan="12">加载中…</td></tr></tbody>
+            <thead><tr><th scope="col">自然人</th><th scope="col">关系性质</th><th scope="col">层级</th><th scope="col">最近互动</th><th scope="col">边界状态</th></tr></thead>
+            <tbody id="relation-tbody"><tr class="empty-row"><td colspan="5">加载中…</td></tr></tbody>
           </table>
         </div>
       </article>
@@ -118,7 +131,7 @@
 
     <section id="panel-identities" class="panel" role="tabpanel" aria-labelledby="tab-identities" data-panel="identities">
       <div class="identity-grid">
-        <article class="card">
+        <article class="card identity-list-card">
           <div class="section-heading">
             <div>
               <h2>自然人身份</h2>
@@ -150,20 +163,20 @@
             <details id="identity-advanced" class="si-disclosure identity-advanced">
               <summary>高级：内部 ID / 关系人格 / 初始关系</summary>
               <div class="identity-advanced-body">
-            <label>内部 ID<input id="person-id" type="text" maxlength="64" placeholder="留空自动生成" autocomplete="off" /></label>
-            <label>关系人格
-              <select id="relationship-profile-id" aria-describedby="relationship-profile-hint"></select>
-              <small id="relationship-profile-hint">账号归属和初始关系将作用于此人格。</small>
-            </label>
-            <label>一次性初始关系
-              <select id="initial-prior" aria-describedby="initial-prior-hint">
-                <option value="">不设置</option>
-                <option value="neutral">中性</option>
-                <option value="acquainted">已认识</option>
-                <option value="fond">有好感</option>
-              </select>
-              <small id="initial-prior-hint">新关系可设置一次；白名单关系在已有互动后也可设置一次。</small>
-            </label>
+                <label>内部 ID<input id="person-id" type="text" maxlength="64" placeholder="留空自动生成" autocomplete="off" /></label>
+                <label>关系人格
+                  <select id="relationship-profile-id" aria-describedby="relationship-profile-hint"></select>
+                  <small id="relationship-profile-hint">账号归属和初始关系将作用于此人格。</small>
+                </label>
+                <label>一次性初始关系
+                  <select id="initial-prior" aria-describedby="initial-prior-hint">
+                    <option value="">不设置</option>
+                    <option value="neutral">中性</option>
+                    <option value="acquainted">已认识</option>
+                    <option value="fond">有好感</option>
+                  </select>
+                  <small id="initial-prior-hint">新关系可设置一次；白名单关系在已有互动后也可设置一次。</small>
+                </label>
               </div>
             </details>
           </div>
@@ -186,23 +199,24 @@
               <h2>插件配置</h2>
               <p>配置通常会立即生效；旧数据归属人格在重启迁移时生效。</p>
             </div>
-            <div class="toolbar">
+            <div class="toolbar settings-actions">
+              <span id="config-dirty-count" class="config-dirty-count" role="status" aria-live="polite">没有未保存修改</span>
               <button id="btn-reset-config" type="button">重置</button>
               <button id="btn-save-config" type="button" class="primary">保存</button>
             </div>
           </div>
-          <div class="config-filter-bar si-filter-bar">
-            <input id="config-search" type="search" class="config-search" placeholder="搜索配置项（名称或说明）" aria-label="搜索配置项" />
-            <label class="config-only-changed"><input id="config-only-changed" type="checkbox" /><span>只看已修改</span></label>
-            <span id="config-dirty-count" class="config-dirty-count" role="status" aria-live="polite">没有未保存修改</span>
-          </div>
+        </div>
+        <div class="config-toolbar si-filter-bar">
+          <input id="config-search" type="search" class="config-search" placeholder="搜索配置项（名称或说明）" aria-label="搜索配置项" />
+          <label class="config-only-changed"><input id="config-only-changed" type="checkbox" /><span>只看已修改</span></label>
+          <button id="btn-config-fold" type="button" class="ghost-link config-fold">展开全部</button>
         </div>
         <div id="config-form" class="config-form"><p class="config-loading">加载配置中…</p></div>
       </article>
     </section>
   </main>
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script src="./series-ui.js?v=0.12.2-1"></script>
-  <script type="module" src="./app.js?v=0.12.2-1"></script>
+  <script src="./series-ui.js?v=0.12.3-1"></script>
+  <script type="module" src="./app.js?v=0.12.3-1"></script>
 </body>
 </html>
