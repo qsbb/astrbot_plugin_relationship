@@ -364,3 +364,71 @@ def test_relationship_profiles_use_readable_short_labels():
     js = (PAGES_DIR / "app.js").read_text(encoding="utf-8")
     assert 'profileId === "default" ? "默认人格"' in js
     assert '自动 · ${profileId.slice(-4)}' in js or '自动 · ' in js
+
+
+def test_identity_editor_folds_advanced_fields():
+    html = (PAGES_DIR / "index.html").read_text(encoding="utf-8")
+    js = (PAGES_DIR / "app.js").read_text(encoding="utf-8")
+    css = (PAGES_DIR / "style.css").read_text(encoding="utf-8")
+
+    assert 'id="identity-advanced"' in html
+    assert 'class="si-disclosure identity-advanced"' in html
+    advanced = html.split('id="identity-advanced"', 1)[1].split("</details>", 1)[0]
+    for field in ("person-id", "relationship-profile-id", "initial-prior"):
+        assert f'id="{field}"' in advanced
+    assert 'id="person-display-name"' not in advanced  # 常用字段不折叠
+    assert 'open = true;' in js
+    assert ".identity-advanced-body" in css
+
+
+def test_identity_tab_supports_search_and_copyable_ids():
+    html = (PAGES_DIR / "index.html").read_text(encoding="utf-8")
+    js = (PAGES_DIR / "app.js").read_text(encoding="utf-8")
+    css = (PAGES_DIR / "style.css").read_text(encoding="utf-8")
+
+    assert 'id="identity-search"' in html
+    assert "function filteredIdentities()" in js
+    assert "let identityQuery = \"\";" in js
+    assert "const filtered = filteredIdentities();" in js
+    assert "没有匹配的自然人" in js
+    assert 'account.session_id' in js
+    assert 'account.memory_profile_id' in js
+    assert '$("#identity-search")?.addEventListener("input"' in js
+    assert 'idChip(person.person_id, "自然人 ID")' in js
+    assert ".identity-search" in css
+    assert ".identity-id-line" in css
+
+
+def test_details_tab_filters_sorts_and_copies_long_ids():
+    html = (PAGES_DIR / "index.html").read_text(encoding="utf-8")
+    js = (PAGES_DIR / "app.js").read_text(encoding="utf-8")
+    css = (PAGES_DIR / "style.css").read_text(encoding="utf-8")
+
+    # 关系明细：层级筛选 + 排序
+    assert 'id="relation-band-filter"' in html
+    assert 'id="relation-sort"' in html
+    for value in ("affinity", "trust", "familiarity", "interaction", "recent"):
+        assert f'value="{value}"' in html
+    assert "function populateBandFilter()" in js
+    assert "function sortRelationshipRows(rows, sort)" in js
+    assert "relationshipBandFilter" in js and "relationshipSort" in js
+
+    # 图表点击跳转 + 自动带筛选
+    assert 'class="band-row" data-band=' in js
+    assert 'activateTab("details");' in js
+    assert 'relationshipBandFilter = row.dataset.band || "";' in js
+
+    # 长 ID 短显示 + 复制
+    assert "function shortId(value, head = 10, tail = 6)" in js
+    assert "function idChip(value, label = \"标识\")" in js
+    assert 'data-copy-id=' in js
+    assert "window.SeriesUI?.copy ? await window.SeriesUI.copy(value) : false" in js
+    assert ".id-chip" in css
+
+    # 自动刷新 + 数据新鲜度
+    assert 'id="auto-refresh"' in html
+    assert 'id="relation-freshness"' in html
+    assert "function updateFreshness(failed = false)" in js
+    assert "function setAutoRefresh(enabled)" in js
+    assert "const AUTO_REFRESH_MS = 60000;" in js
+    assert ".freshness.is-stale" in css

@@ -553,6 +553,7 @@ body[data-series-ui] .config-input input[type="checkbox"] {
   .config-field { grid-template-columns: 1fr; }
   .config-field label { padding-top: 0; }
   .identity-grid { grid-template-columns: minmax(0, 1fr); }
+  .identity-editor { order: -1; }
   .identity-merge-panel { grid-template-columns: 1fr; align-items: stretch; }
   .account-row { grid-template-columns: repeat(2, minmax(0, 1fr)) 40px; }
   .account-row .icon-command { grid-column: 3; grid-row: 1 / span 3; }
@@ -642,3 +643,182 @@ body[data-series-ui] .config-input input[type="checkbox"] {
   .identity-item,
   .bar-fill { transition: none; }
 }
+
+
+#panel-settings .settings-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin-bottom: 14px;
+  padding: 12px 0 10px;
+  border-bottom: 1px solid var(--si-line);
+  background: rgba(255,255,255,.95);
+}
+
+#panel-settings .settings-sticky .section-heading { margin-bottom: 10px; }
+
+.config-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.config-filter-bar .config-search {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.config-only-changed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--si-muted);
+  white-space: nowrap;
+}
+
+.config-dirty-count {
+  margin-left: auto;
+  padding: 6px 11px;
+  border: 1px solid var(--si-line);
+  border-radius: 999px;
+  color: var(--si-muted);
+  background: var(--si-surface-soft);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.config-dirty-count.is-dirty {
+  color: var(--si-primary-strong);
+  border-color: rgba(102, 92, 246, .35);
+  background: var(--si-primary-soft);
+}
+
+.config-dirty-count.is-error {
+  color: var(--si-danger);
+  border-color: rgba(209, 75, 90, .35);
+  background: var(--si-danger-soft);
+}
+
+.config-field[hidden],
+details.config-group[hidden] { display: none; }
+
+.config-group > summary {
+  cursor: pointer;
+  padding: 12px 0;
+  color: var(--si-primary-strong);
+  font-weight: 760;
+  list-style: none;
+}
+
+.config-group > summary::-webkit-details-marker { display: none; }
+.config-group[open] > summary { border-bottom: 1px solid var(--si-line); margin-bottom: 12px; }
+
+
+.visual-grid { grid-template-columns: 1fr; }
+.identity-editor-sheet .identity-editor {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* 关系明细：短 ID + 一键复制、图表跳转、自动刷新状态 */
+.id-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid var(--si-line);
+  border-radius: 999px;
+  color: var(--si-muted);
+  background: var(--si-surface-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.id-chip:hover {
+  color: var(--si-primary-strong);
+  border-color: rgba(102, 92, 246, .4);
+  background: var(--si-primary-soft);
+}
+
+.person-id-line { display: block; margin-top: 4px; }
+
+.band-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.band-row:hover,
+.band-row:focus-visible { background: var(--si-surface-soft); outline: 0; box-shadow: var(--si-focus); }
+
+.freshness {
+  align-self: center;
+  padding: 5px 10px;
+  border: 1px solid var(--si-line);
+  border-radius: 999px;
+  color: var(--si-muted);
+  background: var(--si-surface-soft);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.freshness.is-stale {
+  color: var(--si-warning);
+  border-color: rgba(185, 107, 16, .35);
+  background: var(--si-warning-soft);
+}
+
+.auto-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--si-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.auto-refresh input { width: 16px; height: 16px; }
+
+/* 账号归属搜索 */
+.identity-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.identity-search span { color: var(--si-muted); font-size: 13px; white-space: nowrap; }
+
+.identity-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.identity-id-line { display: block; margin-top: 4px; }
+
+/* 账号归属编辑器：高级字段折叠 */
+.identity-advanced { margin-bottom: 12px; }
+
+.identity-advanced-body {
+  display: grid;
+  gap: 12px;
+  padding: 4px 14px 14px;
+}
+
+.identity-advanced-body label { display: grid; gap: 6px; }

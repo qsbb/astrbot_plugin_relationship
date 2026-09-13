@@ -60,6 +60,13 @@ let pendingRelationshipDeleteTimer = null;
 const relationshipPageSize = window.matchMedia("(max-width: 760px)").matches ? 10 : 20;
 let relationshipVisible = relationshipPageSize;
 let relationshipQuery = "";
+let identityQuery = "";
+let relationshipBandFilter = "";
+let relationshipSort = "default";
+let autoRefreshTimer = null;
+let lastLoadedAt = 0;
+const AUTO_REFRESH_MS = 60000;
+let identityEditorDialog = null;
 
 const API_ERROR_MESSAGES = {
   RELATIONSHIP_STORAGE_READ_ONLY: "关系数据由更高版本写入，当前版本已暂停账号归属修改；请先升级插件",
@@ -74,6 +81,18 @@ const API_ERROR_MESSAGES = {
 
 function $(selector) {
   return document.querySelector(selector);
+}
+
+function shortId(value, head = 10, tail = 6) {
+  const text = String(value ?? "");
+  if (text.length <= head + tail + 1) return text;
+  return `${text.slice(0, head)}…${text.slice(-tail)}`;
+}
+
+function idChip(value, label = "标识") {
+  const text = String(value ?? "");
+  if (!text) return "";
+  return `<button type="button" class="id-chip" data-copy-id="${escapeHtml(text)}" title="点击复制完整值：${escapeHtml(text)}" aria-label="复制${escapeHtml(label)}：${escapeHtml(text)}">${escapeHtml(shortId(text))}</button>`;
 }
 
 function escapeHtml(value) {
@@ -175,10 +194,12 @@ function render(payload) {
   const counts = summary.bands || {};
   const max = Math.max(1, ...bands.map((name) => counts[name] || 0));
   $("#band-chart").innerHTML = bands.map((name) => (
-    `<div class="band-row"><div class="band-label">${escapeHtml(name)}</div>`
+    `<button type="button" class="band-row" data-band="${escapeHtml(name)}" title="查看「${escapeHtml(name)}」的明细">`
+    + `<div class="band-label">${escapeHtml(name)}</div>`
     + `<div class="bar-track"><div class="bar-fill" style="width:${((counts[name] || 0) / max * 100).toFixed(1)}%"></div></div>`
-    + `<div class="band-count">${counts[name] || 0}</div></div>`
+    + `<div class="band-count">${counts[name] || 0}</div></button>`
   )).join("");
+  populateBandFilter();
 
   const users = payload?.users || [];
   overviewUsers = users;
@@ -198,17 +219,72 @@ function updateRelationshipProgressive(total, shown) {
   ].join("");
 }
 
+function updateFreshness(failed = false) {
+  const node = $("#relation-freshness");
+  if (!node) return;
+  if (!lastLoadedAt) {
+    node.textContent = failed ? "读取失败" : "尚未刷新";
+    node.className = "freshness";
+    return;
+  }
+  const ageSeconds = Math.max(0, Math.round((Date.now() - lastLoadedAt) / 1000));
+  const label = ageSeconds < 60
+    ? `${ageSeconds} 秒前更新`
+    : `${Math.floor(ageSeconds / 60)} 分钟前更新`;
+  const stale = ageSeconds > 120;
+  node.textContent = failed ? `上次成功：${label}` : label;
+  node.className = `freshness${stale ? " is-stale" : ""}`;
+}
+
+function setAutoRefresh(enabled) {
+  if (autoRefreshTimer) {
+    window.clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  if (!enabled) return;
+  autoRefreshTimer = window.setInterval(() => {
+    if (document.hidden) return;
+    load().catch(() => {});
+  }, AUTO_REFRESH_MS);
+}
+
+function populateBandFilter() {
+  const select = $("#relation-band-filter");
+  if (!select) return;
+  const current = relationshipBandFilter;
+  select.innerHTML = '<option value="">全部层级</option>'
+    + bands.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+  select.value = bands.includes(current) ? current : "";
+  relationshipBandFilter = select.value;
+}
+
+function sortRelationshipRows(rows, sort) {
+  const num = (value) => Number(value || 0);
+  const copy = [...rows];
+  if (sort === "affinity") copy.sort((a, b) => num(b.affinity) - num(a.affinity));
+  else if (sort === "trust") copy.sort((a, b) => num(b.trust) - num(a.trust));
+  else if (sort === "familiarity") copy.sort((a, b) => num(b.familiarity) - num(a.familiarity));
+  else if (sort === "interaction") copy.sort((a, b) => num(b.interaction_count) - num(a.interaction_count));
+  else if (sort === "recent") copy.sort((a, b) => num(b.last_event_at) - num(a.last_event_at));
+  return copy;
+}
+
 function renderRelationshipTable(users) {
   const query = relationshipQuery.trim().toLowerCase();
-  const filtered = query
-    ? users.filter((user) => `${user.display_name || ""} ${user.user_id || ""} ${user.person_id || ""} ${user.orphaned_person_id || ""}`.toLowerCase().includes(query))
-    : users;
+  let filtered = users.filter((user) => {
+    if (relationshipBandFilter && user.band !== relationshipBandFilter) return false;
+    if (!query) return true;
+    return `${user.display_name || ""} ${user.user_id || ""} ${user.person_id || ""} ${user.orphaned_person_id || ""}`
+      .toLowerCase()
+      .includes(query);
+  });
+  filtered = sortRelationshipRows(filtered, relationshipSort);
   const visible = filtered.slice(0, relationshipVisible);
   const countElement = $("#relation-count");
   if (countElement) countElement.textContent = `共 ${filtered.length} 条`;
   const tbody = $("#relation-tbody");
   if (!filtered.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">暂无关系记录</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">没有匹配的关系记录，换个关键词或层级试试</td></tr>';
     updateRelationshipProgressive(0, 0);
     return;
   }
@@ -235,11 +311,14 @@ function renderRelationshipTable(users) {
       ? escapeHtml(relationshipTypeLabels[currentType])
       : `<select class="relationship-type-select" data-set-type="${index}"`
         + ` aria-label="关系性质">${typeOptions}</select>`;
-    const identityHint = orphaned
-      ? `<small class="user-id">${escapeHtml(user.orphaned_person_id)} · 待重新归属的历史关系</small>`
+    const identityHint = (orphaned
+      ? `<small class="user-id">待重新归属的历史关系</small>`
       : (user.display_name
         ? `<small class="user-id">${escapeHtml(user.user_id)} · ${user.linked_accounts} 个账号</small>`
-        : "");
+        : ""))
+      + (user.person_id
+        ? `<span class="person-id-line">${idChip(user.person_id, "自然人 ID")}</span>`
+        : (orphaned ? `<span class="person-id-line">${idChip(user.orphaned_person_id, "历史自然人 ID")}</span>` : ""));
     const confirmationRow = deleteConfirmation
       ? `<tr class="relationship-detail-row"><td colspan="12">${deleteConfirmation}</td></tr>`
       : "";
@@ -275,9 +354,12 @@ async function load() {
     relationshipVisible = relationshipPageSize;
     relationshipQuery = "";
     render(await apiGet("overview"));
+    lastLoadedAt = Date.now();
+    updateFreshness();
   } catch (error) {
     notify(`加载关系状态失败：${error?.message || String(error)}`, true);
     $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="12">加载失败，请稍后重试</td></tr>';
+    updateFreshness(true);
   } finally {
     if (button) {
       button.disabled = false;
@@ -314,7 +396,9 @@ function renderConfigField(key, field, value) {
       (min !== "" ? ` min="${min}"` : "") + (max !== "" ? ` max="${max}"` : "") +
       describedBy + ` value="${escapeHtml(value)}" />`;
   }
-  return `<div class="config-field">${label}<div class="config-input">${input}` +
+  const searchText = [key, field.description || "", field.hint || ""].join(" ").toLowerCase();
+  return `<div class="config-field" data-config-field="${escapeHtml(key)}" data-config-search="${escapeHtml(searchText)}">` +
+    `${label}<div class="config-input">${input}` +
     `${hint ? `<span class="config-hint" id="${hintId}">${hint}</span>` : ""}</div></div>`;
 }
 
@@ -330,17 +414,88 @@ function renderConfigForm(schema, config) {
         return renderConfigField(key, field, config[key]);
       });
     if (!fields.length) return "";
-    return `<div class="config-group"><h3>${escapeHtml(group.title)}</h3>${fields.join("")}</div>`;
+    const open = group.title === "情绪追踪" ? " open" : "";
+    return `<details class="config-group si-disclosure"${open}><summary>${escapeHtml(group.title)}</summary>${fields.join("")}</details>`;
   }).join("");
 
   const remaining = Object.entries(schema)
     .filter(([key]) => !used.has(key))
     .map(([key, field]) => renderConfigField(key, field, config[key]));
   const extra = remaining.length
-    ? `<div class="config-group"><h3>其他</h3>${remaining.join("")}</div>`
+    ? `<details class="config-group si-disclosure"><summary>其他</summary>${remaining.join("")}</details>`
     : "";
 
-  form.innerHTML = sections + extra || "<p class=\"config-loading\">无可配置项</p>";
+  form.innerHTML = (sections + extra || "<p class=\"config-loading\">无可配置项</p>") +
+    '<p id="config-filter-empty" class="config-loading" hidden>没有匹配的配置项</p>';
+  updateConfigDirtyState();
+  applyConfigFilter();
+}
+
+let configOnlyChanged = false;
+
+function fieldValueFromElement(el) {
+  if (!el || !el.dataset || !el.dataset.key) return undefined;
+  const key = el.dataset.key;
+  if (el.type === "checkbox") return el.checked;
+  const field = configSchema[key];
+  if (field && field.type === "int") {
+    const value = parseInt(el.value, 10);
+    return Number.isNaN(value) ? undefined : value;
+  }
+  if (field && field.type === "float") {
+    const value = parseFloat(el.value);
+    return Number.isNaN(value) ? undefined : value;
+  }
+  return el.value;
+}
+
+function fieldIsDirty(el) {
+  const value = fieldValueFromElement(el);
+  if (value === undefined) return true;
+  return !Object.is(value, configValues[el.dataset.key]);
+}
+
+function updateConfigDirtyState() {
+  const chip = $("#config-dirty-count");
+  if (!chip) return;
+  let dirty = 0;
+  let invalid = 0;
+  document.querySelectorAll("#config-form [data-key]").forEach((el) => {
+    const value = fieldValueFromElement(el);
+    if (value === undefined) {
+      invalid += 1;
+      return;
+    }
+    if (!Object.is(value, configValues[el.dataset.key])) dirty += 1;
+  });
+  const total = dirty + invalid;
+  chip.textContent = total
+    ? (invalid ? `${total} 项待保存（含 ${invalid} 项不是有效数字）` : `${total} 项待保存`)
+    : "没有未保存修改";
+  chip.classList.toggle("is-dirty", total > 0);
+  chip.classList.toggle("is-error", invalid > 0);
+}
+
+function applyConfigFilter() {
+  const form = $("#config-form");
+  if (!form) return;
+  const query = ($("#config-search")?.value || "").trim().toLowerCase();
+  let visibleFields = 0;
+  form.querySelectorAll("details.config-group").forEach((group) => {
+    let visible = 0;
+    group.querySelectorAll("[data-config-field]").forEach((field) => {
+      const input = field.querySelector("[data-key]");
+      const matches = (!query || (field.dataset.configSearch || "").includes(query)) &&
+        (!configOnlyChanged || fieldIsDirty(input));
+      field.hidden = !matches;
+      if (matches) visible += 1;
+    });
+    group.hidden = visible === 0;
+    if (query && visible) group.open = true;
+    visibleFields += visible;
+  });
+  const empty = $("#config-filter-empty");
+  if (empty) empty.hidden = visibleFields > 0;
 }
 
 async function loadConfig() {
@@ -419,6 +574,7 @@ async function saveConfig() {
 
 function resetConfigForm() {
   renderConfigForm(configSchema, configValues);
+  updateConfigDirtyState();
   notify("已重置为当前生效配置");
 }
 
@@ -554,10 +710,44 @@ function editIdentity(person) {
   renderRelationshipProfileOptions(person.relationship_profile_id || defaultRelationshipProfile);
   $("#initial-prior").value = "";
   updateInitialPriorForEditingIdentity();
+  // 编辑已有自然人时展开高级字段，避免看不到当前关系人格。
+  const advanced = $("#identity-advanced");
+  if (advanced) advanced.open = true;
   $("#account-list").innerHTML = (person.accounts || []).map(accountRow).join("") || accountRow();
   $("#btn-add-account").hidden = false;
   $("#btn-save-person").hidden = false;
   $("#btn-save-person").textContent = "保存账号归属";
+  openIdentityEditorSheet();
+}
+
+function identitySheetMedia() {
+  return window.matchMedia("(max-width: 900px)").matches;
+}
+
+function openIdentityEditorSheet() {
+  if (!identitySheetMedia() || identityEditorDialog?.isOpen()) return;
+  const editor = document.querySelector(".identity-editor");
+  if (!editor) return;
+  const parent = editor.parentElement;
+  const next = editor.nextSibling;
+  const body = document.createElement("div");
+  body.appendChild(editor);
+  identityEditorDialog = window.SeriesUI.dialog({
+    title: "编辑自然人",
+    body,
+    width: "min(760px, 100%)",
+    bodyClassName: "identity-editor-sheet",
+    actions: [{ id: "close", label: "关闭", variant: "primary" }],
+    onClose: () => {
+      if (next && next.parentNode === parent) parent.insertBefore(editor, next);
+      else parent.appendChild(editor);
+      identityEditorDialog = null;
+    },
+  });
+}
+
+function closeIdentityEditorSheet() {
+  identityEditorDialog?.close();
 }
 
 function scrollToIdentityEditor() {
@@ -668,13 +858,38 @@ function armDeleteIdentity(personId) {
   notify("请先确认关系迁回账号，再在 8 秒内点击“确认解除”；原有白名单资格和记忆数据都会保留");
 }
 
+function filteredIdentities() {
+  const query = identityQuery.trim().toLowerCase();
+  if (!query) return identities;
+  return identities.filter((person) => {
+    const haystack = [
+      person.display_name,
+      person.person_id,
+      ...(person.accounts || []).flatMap((account) => [
+        account.platform_id,
+        account.user_id,
+        account.bot_id,
+        account.session_id,
+        account.memory_profile_id,
+        account.label,
+      ]),
+    ].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
 function renderIdentityList() {
   const list = $("#identity-list");
   if (!identities.length) {
     list.innerHTML = '<p class="config-loading">暂无自然人身份</p>';
     return;
   }
-  list.innerHTML = identities.map((person) => {
+  const filtered = filteredIdentities();
+  if (!filtered.length) {
+    list.innerHTML = `<p class="config-loading">没有匹配的自然人；当前共 ${identities.length} 个，换个关键词试试</p>`;
+    return;
+  }
+  list.innerHTML = filtered.map((person) => {
     const pending = pendingDeletePersonId === person.person_id;
     const accounts = person.accounts || [];
     const mergeButton = identities.length > 1
@@ -691,7 +906,8 @@ function renderIdentityList() {
         + `<small>只迁回所选账号，其他账号解除归属后从各自的新关系开始；原有白名单资格会保留。</small></div>`
       : "";
     return (`<div class="identity-item" data-person-id="${escapeHtml(person.person_id)}">`
-      + `<div><strong>${escapeHtml(person.display_name)}</strong><span>${escapeHtml(person.person_id)}</span></div>`
+      + `<div><strong>${escapeHtml(person.display_name)}</strong>`
+      + `<span class="identity-id-line">${idChip(person.person_id, "自然人 ID")}</span></div>`
       + `<span class="account-count">${accounts.length} 个账号</span>`
       + `<div class="identity-actions"><button type="button" data-action="edit">编辑</button>`
       + mergeButton
@@ -990,8 +1206,8 @@ async function deleteRelationship(index, button) {
 
 function initIdentityEditor() {
   resetIdentityEditor();
-  $("#btn-new-person").addEventListener("click", () => resetIdentityEditor());
-  $("#btn-cancel-person").addEventListener("click", () => resetIdentityEditor());
+  $("#btn-new-person").addEventListener("click", () => { resetIdentityEditor(); openIdentityEditorSheet(); });
+  $("#btn-cancel-person").addEventListener("click", () => { closeIdentityEditorSheet(); resetIdentityEditor(); });
   $("#btn-add-account").addEventListener("click", () => {
     $("#account-list").insertAdjacentHTML("beforeend", accountRow());
   });
@@ -1052,6 +1268,48 @@ function initTabs() {
 
 function bindPageEvents() {
   initTabs();
+  document.addEventListener("click", async (event) => {
+    const chip = event.target.closest?.("[data-copy-id]");
+    if (!chip) return;
+    const value = chip.dataset.copyId || "";
+    if (!value) return;
+    let copied = false;
+    try {
+      copied = window.SeriesUI?.copy ? await window.SeriesUI.copy(value) : false;
+    } catch (_) {
+      copied = false;
+    }
+    notify(copied ? "已复制完整标识" : "复制失败，请手动选中后复制", !copied);
+  });
+  $("#band-chart")?.addEventListener("click", (event) => {
+    const row = event.target.closest("[data-band]");
+    if (!row) return;
+    relationshipBandFilter = row.dataset.band || "";
+    relationshipVisible = relationshipPageSize;
+    const select = $("#relation-band-filter");
+    if (select) select.value = relationshipBandFilter;
+    activateTab("details");
+    renderRelationshipTable(overviewUsers);
+  });
+  $("#relation-band-filter")?.addEventListener("change", (event) => {
+    relationshipBandFilter = event.target.value;
+    relationshipVisible = relationshipPageSize;
+    renderRelationshipTable(overviewUsers);
+  });
+  $("#relation-sort")?.addEventListener("change", (event) => {
+    relationshipSort = event.target.value;
+    relationshipVisible = relationshipPageSize;
+    renderRelationshipTable(overviewUsers);
+  });
+  $("#identity-search")?.addEventListener("input", (event) => {
+    identityQuery = event.target.value;
+    renderIdentityList();
+  });
+  $("#auto-refresh")?.addEventListener("change", (event) => {
+    setAutoRefresh(event.target.checked);
+    notify(event.target.checked ? "已开启自动刷新（60 秒）" : "已关闭自动刷新");
+  });
+  window.setInterval(updateFreshness, 15000);
   $("#relation-search")?.addEventListener("input", (event) => {
     relationshipQuery = event.target.value;
     relationshipVisible = relationshipPageSize;
@@ -1067,6 +1325,18 @@ function bindPageEvents() {
   $("#btn-refresh").addEventListener("click", load);
   $("#btn-save-config").addEventListener("click", saveConfig);
   $("#btn-reset-config").addEventListener("click", resetConfigForm);
+  $("#config-search").addEventListener("input", applyConfigFilter);
+  $("#config-only-changed").addEventListener("change", (event) => {
+    configOnlyChanged = event.target.checked;
+    applyConfigFilter();
+  });
+  const configForm = $("#config-form");
+  const onConfigFieldChange = () => {
+    updateConfigDirtyState();
+    if (configOnlyChanged) applyConfigFilter();
+  };
+  configForm.addEventListener("input", onConfigFieldChange);
+  configForm.addEventListener("change", onConfigFieldChange);
   $("#relation-tbody").addEventListener("change", (event) => {
     const typeSelect = event.target.closest("[data-set-type]");
     if (typeSelect) {
