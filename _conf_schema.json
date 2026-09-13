@@ -358,6 +358,7 @@
     "description": "日志级别",
     "hint": "INFO 只记录正常运行所需信息；DEBUG 会输出更多排查细节，适合临时诊断问题，长期开启会产生更多日志。",
     "default": "INFO",
-    "options": ["DEBUG", "INFO"]
+    "options": ["DEBUG", "INFO"],
+    "labels": ["调试", "信息"]
   }
 }

@@ -1,0 +1,18 @@
+{
+  "config": {
+    "general": {
+      "LOG_LEVEL": {
+        "labels": [
+          "Debug",
+          "Info"
+        ]
+      }
+    }
+  },
+  "pages": {
+    "manager": {
+      "title": "Relationship Manager",
+      "description": "Manage relationship policies, affinity, relationship details, and natural-person identities"
+    }
+  }
+}

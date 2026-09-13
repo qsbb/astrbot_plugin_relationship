@@ -622,6 +622,27 @@ function fieldIsDirty(el) {
   return !Object.is(value, configValues[el.dataset.key]);
 }
 
+function hasUnsavedChanges() {
+  return [...document.querySelectorAll("#config-form [data-key]")].some(fieldIsDirty);
+}
+
+const showUnsavedConfirm = window.SeriesUI.confirm;
+
+async function confirmDiscardChanges() {
+  if (!hasUnsavedChanges()) return true;
+  return (await showUnsavedConfirm({
+    title: "未保存的修改",
+    message: "当前页面还有未保存的改动，离开将放弃这些改动。",
+    confirmText: "放弃修改",
+    cancelText: "继续编辑",
+    danger: true,
+  })) === true;
+}
+
+function discardConfigChanges() {
+  renderConfigForm(configSchema, configValues);
+}
+
 function updateConfigDirtyState() {
   const chip = $("#config-dirty-count");
   if (!chip) return;
@@ -928,7 +949,12 @@ function scrollToIdentityEditor() {
   });
 }
 
-function activateTab(target) {
+async function activateTab(target) {
+  const current = document.querySelector(".tabs button[data-tab].active")?.dataset.tab;
+  if (current && current !== target) {
+    if (!await confirmDiscardChanges()) return false;
+    if (hasUnsavedChanges()) discardConfigChanges();
+  }
   if (target !== "identities") resetIdentityMergeConfirmation();
   if (target !== "overview") clearRelationshipDeleteConfirmation();
   document.querySelectorAll(".tabs button[data-tab]").forEach((button) => {
@@ -942,12 +968,13 @@ function activateTab(target) {
     panel.classList.toggle("active", active);
     panel.setAttribute("aria-hidden", String(!active));
   });
+  return true;
 }
 
 async function quickEditRelationship(index) {
   const user = overviewUsers[index];
   if (!user) return;
-  activateTab("identities");
+  if (!await activateTab("identities")) return;
 
   if (user.person_id) {
     let person = identities.find((item) => item.person_id === user.person_id);
@@ -1408,7 +1435,7 @@ function initTabs() {
   const buttons = [...document.querySelectorAll(".tabs button[data-tab]")];
   buttons.forEach((btn, index) => {
     btn.addEventListener("click", () => activateTab(btn.dataset.tab));
-    btn.addEventListener("keydown", (event) => {
+    btn.addEventListener("keydown", async (event) => {
       let targetIndex;
       if (event.key === "ArrowLeft") {
         targetIndex = (index - 1 + buttons.length) % buttons.length;
@@ -1423,8 +1450,7 @@ function initTabs() {
       }
       event.preventDefault();
       const target = buttons[targetIndex];
-      activateTab(target.dataset.tab);
-      target.focus();
+      if (await activateTab(target.dataset.tab)) target.focus();
     });
   });
 }
@@ -1618,6 +1644,12 @@ async function init() {
   }
   await Promise.allSettled([load(), loadConfig(), loadIdentities()]);
 }
+
+window.addEventListener("beforeunload", (event) => {
+  if (!hasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 
 init().catch((error) => {
   notify(`页面启动失败：${error?.message || String(error)}`, true);
