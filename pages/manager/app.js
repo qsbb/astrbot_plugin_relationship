@@ -300,7 +300,9 @@ function renderRelationshipTable(users) {
       ? relationshipDeleteProfilePicker(profiles, pendingRelationshipDeleteProfileId)
       : "";
     const profileMarkup = profiles.map((profileId) => {
-      const label = profileId === "default" ? "默认人格" : (profileId.startsWith("auto-") ? `自动 · ${profileId.slice(-4)}` : profileId);
+      const label = profileId === "default"
+        ? "默认人格"
+        : (profileId.startsWith("auto-") ? `自动 · ${profileId.slice(-4)}` : `自定义人格 · ${String(profileId).slice(-4)}`);
       return `<code class="profile-id" title="${escapeHtml(profileId)}">${escapeHtml(label)}</code>`;
     }).join("");
     const currentType = relationshipTypeLabels[user.relationship_type] ? user.relationship_type : "friend";
@@ -580,11 +582,11 @@ function resetConfigForm() {
 
 function accountRow(account = {}) {
   return `<div class="account-row">`
-    + `<label>平台 ID<input data-account="platform_id" type="text" maxlength="120" value="${escapeHtml(account.platform_id || "")}" /></label>`
-    + `<label>UID<input data-account="user_id" type="text" maxlength="120" value="${escapeHtml(account.user_id || "")}" /></label>`
+    + `<label>平台账号<input data-account="platform_id" type="text" maxlength="120" value="${escapeHtml(account.platform_id || "")}" /></label>`
+    + `<label>账号 ID<input data-account="user_id" type="text" maxlength="120" value="${escapeHtml(account.user_id || "")}" /></label>`
     + `<label>Bot ID<input data-account="bot_id" type="text" maxlength="120" value="${escapeHtml(account.bot_id || "")}" /></label>`
-    + `<label>UMO<input data-account="session_id" type="text" maxlength="240" value="${escapeHtml(account.session_id || "")}" /></label>`
-    + `<label>记忆人格 ID<input data-account="memory_profile_id" type="text" maxlength="64" value="${escapeHtml(account.memory_profile_id || "")}" placeholder="留空使用默认人格" /></label>`
+    + `<label>聊天会话标识<input data-account="session_id" type="text" maxlength="240" value="${escapeHtml(account.session_id || "")}" /></label>`
+    + `<label>记忆人格<input data-account="memory_profile_id" type="text" maxlength="64" value="${escapeHtml(account.memory_profile_id || "")}" placeholder="留空使用默认人格" /></label>`
     + `<label>备注<input data-account="label" type="text" maxlength="80" value="${escapeHtml(account.label || "")}" /></label>`
     + `<button type="button" class="remove-account icon-command danger-command" title="移除账号" aria-label="移除账号">×</button>`
     + `</div>`;

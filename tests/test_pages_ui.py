@@ -202,7 +202,8 @@ class PagesUiTest(unittest.TestCase):
 
     def test_account_memory_profile_is_editable(self) -> None:
         self.assertIn('data-account="memory_profile_id"', self.js)
-        self.assertIn("记忆人格 ID", self.js)
+        self.assertIn("记忆人格", self.js)
+        self.assertIn('data-account="memory_profile_id"', self.js)
         self.assertNotIn("<label>关系人格 ID", self.js)
 
     def test_partial_initial_prior_failure_is_reported(self) -> None:
@@ -213,8 +214,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("只有白名单关系可以调整", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.12.1", self.html)
-        self.assertIn("app.js?v=0.12.1", self.html)
+        self.assertIn("style.css?v=0.12.2", self.html)
+        self.assertIn("app.js?v=0.12.2", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)
@@ -362,7 +363,9 @@ if __name__ == "__main__":
 
 def test_relationship_profiles_use_readable_short_labels():
     js = (PAGES_DIR / "app.js").read_text(encoding="utf-8")
-    assert 'profileId === "default" ? "默认人格"' in js
+    assert '"默认人格"' in js
+    assert "自动 · ${profileId.slice(-4)}" in js
+    assert "自定义人格 · ${String(profileId).slice(-4)}" in js
     assert '自动 · ${profileId.slice(-4)}' in js or '自动 · ' in js
 
 

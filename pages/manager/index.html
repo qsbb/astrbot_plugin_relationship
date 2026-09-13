@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-情 · 关系状态</title>
-  <link rel="stylesheet" href="./style.css?v=0.12.1-2" />
-  <link rel="stylesheet" href="./series-ui.css?v=0.12.1-2" />
+  <link rel="stylesheet" href="./style.css?v=0.12.2-1" />
+  <link rel="stylesheet" href="./series-ui.css?v=0.12.2-1" />
   </head>
 <body data-series-ui="1">
   <p data-toast-fallback role="alert" hidden style="margin:12px; padding:10px 12px; border:1px solid rgba(209,75,90,.35); border-radius:10px; color:#a33; background:#fff0f2;"></p>
@@ -126,7 +126,7 @@
             </div>
             <button id="btn-new-person" type="button" class="icon-command" title="新建自然人" aria-label="新建自然人">+</button>
           </div>
-          <label class="identity-search si-filter-bar"><span>搜索</span><input id="identity-search" type="search" placeholder="名称、自然人 ID、账号 ID 或 UMO" aria-label="搜索自然人" /></label>
+          <label class="identity-search si-filter-bar"><span>搜索</span><input id="identity-search" type="search" placeholder="名称、自然人 ID、账号 ID 或会话标识" aria-label="搜索自然人" /></label>
           <div id="identity-list" class="identity-list"><p class="config-loading">加载账号归属中…</p></div>
         </article>
 
@@ -171,6 +171,7 @@
             <h3>平台账号</h3>
             <button id="btn-add-account" type="button" class="icon-command" title="添加平台账号" aria-label="添加平台账号">+</button>
           </div>
+          <p class="field-help">这些账号是“同一个人”的凭据：平台账号用于识别来源，聊天会话标识（UMO）用于定位会话，多平台账号归到同一个自然人后共享一份关系状态。</p>
           <div id="account-list" class="account-list"></div>
           <button id="btn-save-person" type="button" class="primary identity-save">保存账号归属</button>
         </article>
@@ -191,7 +192,7 @@
             </div>
           </div>
           <div class="config-filter-bar si-filter-bar">
-            <input id="config-search" type="search" class="config-search" placeholder="搜索配置项（名称、key 或说明）" aria-label="搜索配置项" />
+            <input id="config-search" type="search" class="config-search" placeholder="搜索配置项（名称或说明）" aria-label="搜索配置项" />
             <label class="config-only-changed"><input id="config-only-changed" type="checkbox" /><span>只看已修改</span></label>
             <span id="config-dirty-count" class="config-dirty-count" role="status" aria-live="polite">没有未保存修改</span>
           </div>
@@ -201,7 +202,7 @@
     </section>
   </main>
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script src="./series-ui.js?v=0.12.1-2"></script>
-  <script type="module" src="./app.js?v=0.12.1-2"></script>
+  <script src="./series-ui.js?v=0.12.2-1"></script>
+  <script type="module" src="./app.js?v=0.12.2-1"></script>
 </body>
 </html>

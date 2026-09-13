@@ -88,11 +88,25 @@ body[data-series-ui] .metric strong.danger { color: var(--si-danger); }
 
 .band-row {
   display: grid;
-  grid-template-columns: 132px minmax(80px, 1fr) 36px;
+  grid-template-columns: 104px minmax(60px, 1fr) 40px;
   align-items: center;
   gap: 10px;
-  margin: 15px 0;
+  width: 100%;
+  min-height: 44px;
+  margin: 2px 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
+
+.band-row:hover,
+.band-row:focus-visible { background: var(--si-surface-soft); outline: 0; box-shadow: var(--si-focus); }
+
+.band-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .band-label { color: var(--si-muted); font-size: 13px; }
 
@@ -553,7 +567,7 @@ body[data-series-ui] .config-input input[type="checkbox"] {
   .config-field { grid-template-columns: 1fr; }
   .config-field label { padding-top: 0; }
   .identity-grid { grid-template-columns: minmax(0, 1fr); }
-  .identity-editor { order: -1; }
+  .identity-editor { order: 0; }
   .identity-merge-panel { grid-template-columns: 1fr; align-items: stretch; }
   .account-row { grid-template-columns: repeat(2, minmax(0, 1fr)) 40px; }
   .account-row .icon-command { grid-column: 3; grid-row: 1 / span 3; }
@@ -610,8 +624,7 @@ body[data-series-ui] .config-input input[type="checkbox"] {
   .policy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .toolbar { width: 100%; }
   .toolbar > * { flex: 1; }
-  .band-row { grid-template-columns: 110px minmax(60px, 1fr) 30px; }
-  .identity-fields { grid-template-columns: minmax(0, 1fr); }
+    .identity-fields { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 560px) {
@@ -730,6 +743,8 @@ details.config-group[hidden] { display: none; }
   display: inline-flex;
   align-items: center;
   max-width: 100%;
+  min-height: 0;
+  height: auto;
   padding: 2px 8px;
   border: 1px solid var(--si-line);
   border-radius: 999px;
@@ -747,22 +762,7 @@ details.config-group[hidden] { display: none; }
   background: var(--si-primary-soft);
 }
 
-.person-id-line { display: block; margin-top: 4px; }
-
-.band-row {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) 42px;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 6px 4px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
+.person-id-line { display: block; margin-top: 6px; }
 
 .band-row:hover,
 .band-row:focus-visible { background: var(--si-surface-soft); outline: 0; box-shadow: var(--si-focus); }
@@ -810,7 +810,7 @@ details.config-group[hidden] { display: none; }
   min-width: 0;
 }
 
-.identity-id-line { display: block; margin-top: 4px; }
+.identity-id-line { display: block; margin-top: 6px; }
 
 /* 账号归属编辑器：高级字段折叠 */
 .identity-advanced { margin-bottom: 12px; }
@@ -822,3 +822,32 @@ details.config-group[hidden] { display: none; }
 }
 
 .identity-advanced-body label { display: grid; gap: 6px; }
+
+/* 关系明细筛选栏：标签+控件竖排，宽度自适应；窄屏整行 */
+body[data-series-ui] .si-filter-bar .control {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+body[data-series-ui] .si-filter-bar .control > span {
+  color: var(--si-muted);
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  body[data-series-ui] .si-filter-bar .control { flex: 1 1 100%; }
+}
+
+@media (max-width: 760px) {
+  #panel-settings .settings-sticky { padding: 8px 0 6px; }
+  #panel-settings .settings-sticky .section-heading p { display: none; }
+  #panel-settings .settings-sticky .section-heading { margin-bottom: 8px; }
+  .config-dirty-count { margin-left: 0; }
+  .config-filter-bar { gap: 8px; }
+  .table-card > .table-wrap { width: 100%; margin-inline: 0; }
+}
+
+/* 字段/区域用途说明：小字灰色，避免与正文抢视觉 */
+.field-help { margin: 6px 0 10px; color: var(--si-muted); font-size: 12px; line-height: 1.6; }
