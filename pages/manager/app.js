@@ -191,9 +191,10 @@ function render(payload) {
     const deleteConfirmation = deletePending && multipleProfiles
       ? relationshipDeleteProfilePicker(profiles, pendingRelationshipDeleteProfileId)
       : "";
-    const profileMarkup = profiles.map((profileId) => (
-      `<code class="profile-id">${escapeHtml(profileId)}</code>`
-    )).join("");
+    const profileMarkup = profiles.map((profileId) => {
+      const label = profileId === "default" ? "默认人格" : (profileId.startsWith("auto-") ? `自动 · ${profileId.slice(-4)}` : profileId);
+      return `<code class="profile-id" title="${escapeHtmlAttr(profileId)}">${escapeHtml(label)}</code>`;
+    }).join("");
     const currentType = relationshipTypeLabels[user.relationship_type] ? user.relationship_type : "friend";
     const typeOptions = relationshipTypeOptions.map(([value, label]) => (
       `<option value="${value}"${value === currentType ? " selected" : ""}>${label}</option>`

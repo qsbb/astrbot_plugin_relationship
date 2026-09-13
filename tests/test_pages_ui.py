@@ -344,3 +344,9 @@ class PagesUiTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_relationship_profiles_use_readable_short_labels():
+    js = (PAGES_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'profileId === "default" ? "默认人格"' in js
+    assert '自动 · ${profileId.slice(-4)}' in js or '自动 · ' in js
