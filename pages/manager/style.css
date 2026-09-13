@@ -52,7 +52,7 @@
   white-space: nowrap;
 }
 
-.auto-refresh input { width: 16px; height: 16px; }
+.auto-refresh input:not(.si-toggle) { width: 16px; height: 16px; }
 
 /* ---------------------------------------------------------------- tabs */
 
@@ -1050,8 +1050,6 @@ body[data-series-ui] .config-input select {
 body[data-series-ui] .config-input input.config-text-wide { max-width: 100%; }
 
 body[data-series-ui] .config-input input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   margin-top: 8px;
 }
 

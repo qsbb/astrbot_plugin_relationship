@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>凝心溯溪-情 · 关系状态</title>
-  <link rel="stylesheet" href="./style.css?v=0.12.4-1" />
-  <link rel="stylesheet" href="./series-ui.css?v=0.12.4-1" />
+  <link rel="stylesheet" href="./style.css?v=0.12.5-1" />
+  <link rel="stylesheet" href="./series-ui.css?v=0.12.5-1" />
   </head>
 <body data-series-ui="1">
   <p data-toast-fallback role="alert" hidden style="margin:12px; padding:10px 12px; border:1px solid rgba(209,75,90,.35); border-radius:10px; color:#a33; background:#fff0f2;"></p>
@@ -18,7 +18,7 @@
       </div>
       <div class="toolbar">
         <span id="relation-freshness" class="freshness" role="status" aria-live="polite">尚未刷新</span>
-        <label class="auto-refresh"><input id="auto-refresh" type="checkbox" /><span>自动刷新</span></label>
+        <label class="auto-refresh"><input id="auto-refresh" class="si-toggle" type="checkbox" /><span>自动刷新</span></label>
         <button id="btn-refresh" type="button">刷新</button>
       </div>
     </header>
@@ -208,7 +208,7 @@
         </div>
         <div class="config-toolbar si-filter-bar">
           <input id="config-search" type="search" class="config-search" placeholder="搜索配置项（名称或说明）" aria-label="搜索配置项" />
-          <label class="config-only-changed"><input id="config-only-changed" type="checkbox" /><span>只看已修改</span></label>
+          <label class="config-only-changed"><input id="config-only-changed" class="si-toggle" type="checkbox" /><span>只看已修改</span></label>
           <button id="btn-config-fold" type="button" class="ghost-link config-fold">展开全部</button>
         </div>
         <div id="config-form" class="config-form"><p class="config-loading">加载配置中…</p></div>
@@ -216,7 +216,7 @@
     </section>
   </main>
   <script src="/api/plugin/page/bridge-sdk.js"></script>
-  <script src="./series-ui.js?v=0.12.4-1"></script>
-  <script type="module" src="./app.js?v=0.12.4-1"></script>
+  <script src="./series-ui.js?v=0.12.5-1"></script>
+  <script type="module" src="./app.js?v=0.12.5-1"></script>
 </body>
 </html>

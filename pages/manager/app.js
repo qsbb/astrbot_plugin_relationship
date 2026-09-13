@@ -511,7 +511,7 @@ function renderConfigField(key, field, value) {
   let input;
   if (field.type === "bool") {
     const checked = value === true || value === "true" ? " checked" : "";
-    input = `<input type="checkbox" id="${id}" data-key="${key}"${describedBy}${checked} />`;
+    input = `<input type="checkbox" class="si-toggle" id="${id}" data-key="${key}"${describedBy}${checked} />`;
   } else if (field.options) {
     const opts = field.options.map((opt) => (
       `<option value="${escapeHtml(opt)}"${String(value) === String(opt) ? " selected" : ""}>${escapeHtml(opt)}</option>`
