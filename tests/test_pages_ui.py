@@ -213,8 +213,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("只有白名单关系可以调整", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.12.0", self.html)
-        self.assertIn("app.js?v=0.12.0", self.html)
+        self.assertIn("style.css?v=0.12.1", self.html)
+        self.assertIn("app.js?v=0.12.1", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)
@@ -293,7 +293,7 @@ class PagesUiTest(unittest.TestCase):
     def test_overview_shows_relation_count(self) -> None:
         self.assertIn('id="relation-count"', self.html)
         self.assertIn('$("#relation-count")', self.js)
-        self.assertIn("共 ${users.length} 条", self.js)
+        self.assertIn("共 ${filtered.length} 条", self.js)
 
     def test_invalid_numeric_config_is_not_submitted(self) -> None:
         self.assertIn("Number.isNaN(value)", self.js)
@@ -301,10 +301,11 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("以下配置不是有效数字，未保存：", self.js)
         self.assertIn("有效配置已保存；以下数字项无效，未提交：", self.js)
 
-    def test_error_toast_uses_alert_role(self) -> None:
+    def test_error_feedback_uses_shared_toast(self) -> None:
         self.assertIn(
-            'element.setAttribute("role", error ? "alert" : "status")', self.js
+            'window.SeriesUI.toast(message, error ? "error" : "info")', self.js
         )
+        self.assertNotIn("function toast(", self.js)
 
     def test_busy_buttons_restore_labels(self) -> None:
         self.assertIn('button.textContent = "保存中…";', self.js)
@@ -336,10 +337,23 @@ class PagesUiTest(unittest.TestCase):
         self.assertNotIn("linear-gradient(145deg", self.css)
         self.assertNotIn("radial-gradient(circle at top right", self.css)
 
-    def test_css_has_keyboard_focus_and_toast_bounds(self) -> None:
+    def test_css_has_keyboard_focus_and_shared_toast(self) -> None:
         self.assertIn("button:focus-visible", self.series_css)
         self.assertIn("box-shadow: var(--si-focus)", self.series_css)
-        self.assertIn("max-width: calc(100vw - 48px)", self.css)
+        self.assertNotIn("#toast", self.css)
+        self.assertIn('window.SeriesUI.toast(message, error ? "error" : "info")', self.js)
+
+
+    def test_relationship_profile_title_uses_defined_escape_helper(self) -> None:
+        self.assertNotIn("escapeHtmlAttr", self.js)
+        self.assertIn('title="${escapeHtml(profileId)}"', self.js)
+
+
+    def test_multi_profile_delete_confirmation_uses_full_width_row(self) -> None:
+        self.assertNotIn('button.closest(".row-actions")?.insertAdjacentHTML', self.js)
+        self.assertIn('const dataRow = button.closest("tr");', self.js)
+        self.assertIn('<tr class="relationship-detail-row"><td colspan="12">', self.js)
+        self.assertIn(".relationship-detail-row .relationship-delete-confirmation", self.css)
 
 
 if __name__ == "__main__":

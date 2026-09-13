@@ -1,5 +1,19 @@
 let bridge = null;
 
+const notify = (message, error = false) => {
+  if (window.SeriesUI?.toast) {
+    window.SeriesUI.toast(message, error ? "error" : "info");
+    return;
+  }
+  const fallback = document.querySelector("[data-toast-fallback], #bridge-error, #startup-error, #page-error");
+  if (fallback) {
+    fallback.textContent = String(message || "");
+    fallback.hidden = false;
+  } else {
+    console.error(message);
+  }
+};
+
 const bands = ["高好感 / 信任圈", "朋友", "普通熟人", "保持距离", "边界警戒"];
 const relationshipTypeOptions = [
   ["friend", "朋友"],
@@ -43,6 +57,9 @@ let pendingDeleteTimer = null;
 let pendingRelationshipDeleteKey = "";
 let pendingRelationshipDeleteProfileId = "";
 let pendingRelationshipDeleteTimer = null;
+const relationshipPageSize = window.matchMedia("(max-width: 760px)").matches ? 10 : 20;
+let relationshipVisible = relationshipPageSize;
+let relationshipQuery = "";
 
 const API_ERROR_MESSAGES = {
   RELATIONSHIP_STORAGE_READ_ONLY: "关系数据由更高版本写入，当前版本已暂停账号归属修改；请先升级插件",
@@ -105,16 +122,7 @@ function relationshipDeleteProfilePicker(profiles, selectedProfile = "") {
     + `<small>本次只删除所选人格的关系记录；其他人格和白名单设置保持不变。</small></div>`;
 }
 
-function toast(message, error = false) {
-  const element = $("#toast");
-  if (!element) return;
-  element.textContent = message;
-  element.classList.toggle("error", error);
-  element.setAttribute("role", error ? "alert" : "status");
-  element.classList.remove("hidden");
-  clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => element.classList.add("hidden"), 3000);
-}
+
 
 async function resolveBridge(timeout = 3000) {
   if (window.AstrBotPluginPage) return window.AstrBotPluginPage;
@@ -174,15 +182,39 @@ function render(payload) {
 
   const users = payload?.users || [];
   overviewUsers = users;
+  renderRelationshipTable(users);
+}
+
+function updateRelationshipProgressive(total, shown) {
+  const host = $("#relation-progressive");
+  if (!host) return;
+  const remaining = Math.max(0, total - shown);
+  const showMore = remaining > 0;
+  const showCollapse = relationshipVisible > relationshipPageSize;
+  host.hidden = !showMore && !showCollapse;
+  host.innerHTML = [
+    showMore ? `<button type="button" data-relation-more>显示更多（剩余 ${remaining} 条）</button>` : "",
+    showCollapse ? '<button type="button" data-relation-collapse>收起</button>' : "",
+  ].join("");
+}
+
+function renderRelationshipTable(users) {
+  const query = relationshipQuery.trim().toLowerCase();
+  const filtered = query
+    ? users.filter((user) => `${user.display_name || ""} ${user.user_id || ""} ${user.person_id || ""} ${user.orphaned_person_id || ""}`.toLowerCase().includes(query))
+    : users;
+  const visible = filtered.slice(0, relationshipVisible);
   const countElement = $("#relation-count");
-  if (countElement) countElement.textContent = `共 ${users.length} 条`;
+  if (countElement) countElement.textContent = `共 ${filtered.length} 条`;
   const tbody = $("#relation-tbody");
-  if (!users.length) {
+  if (!filtered.length) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="12">暂无关系记录</td></tr>';
+    updateRelationshipProgressive(0, 0);
     return;
   }
 
-  tbody.innerHTML = users.map((user, index) => {
+  tbody.innerHTML = visible.map((user) => {
+    const index = overviewUsers.indexOf(user);
     const orphaned = Boolean(user.orphaned_person_id);
     const actionLabel = user.person_id ? "编辑归属" : (orphaned ? "处理历史关系" : "快速归属");
     const deletePending = pendingRelationshipDeleteKey === relationshipDeleteKey(user);
@@ -193,7 +225,7 @@ function render(payload) {
       : "";
     const profileMarkup = profiles.map((profileId) => {
       const label = profileId === "default" ? "默认人格" : (profileId.startsWith("auto-") ? `自动 · ${profileId.slice(-4)}` : profileId);
-      return `<code class="profile-id" title="${escapeHtmlAttr(profileId)}">${escapeHtml(label)}</code>`;
+      return `<code class="profile-id" title="${escapeHtml(profileId)}">${escapeHtml(label)}</code>`;
     }).join("");
     const currentType = relationshipTypeLabels[user.relationship_type] ? user.relationship_type : "friend";
     const typeOptions = relationshipTypeOptions.map(([value, label]) => (
@@ -229,6 +261,7 @@ function render(payload) {
     + `${deletePending ? (multipleProfiles ? "确认删除所选人格" : "确认删除关系") : "删除关系"}`
     + `</button></div></td></tr>${confirmationRow}`);
   }).join("");
+  updateRelationshipProgressive(filtered.length, visible.length);
 }
 
 async function load() {
@@ -239,9 +272,11 @@ async function load() {
     button.textContent = "刷新中…";
   }
   try {
+    relationshipVisible = relationshipPageSize;
+    relationshipQuery = "";
     render(await apiGet("overview"));
   } catch (error) {
-    toast(`加载关系状态失败：${error?.message || String(error)}`, true);
+    notify(`加载关系状态失败：${error?.message || String(error)}`, true);
     $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="12">加载失败，请稍后重试</td></tr>';
   } finally {
     if (button) {
@@ -358,7 +393,7 @@ async function saveConfig() {
   try {
     const { changes, invalid } = collectConfigChanges();
     if (!Object.keys(changes).length) {
-      toast(invalid.length
+      notify(invalid.length
         ? `以下配置不是有效数字，未保存：${invalid.join("、")}`
         : "没有需要保存的变更", invalid.length > 0);
       return;
@@ -367,12 +402,12 @@ async function saveConfig() {
     configValues = data.config || {};
     renderConfigForm(configSchema, configValues);
     if (invalid.length) {
-      toast(`有效配置已保存；以下数字项无效，未提交：${invalid.join("、")}`, true);
+      notify(`有效配置已保存；以下数字项无效，未提交：${invalid.join("、")}`, true);
     } else {
-      toast(data.restart_required ? "配置已保存；旧数据归属需重启后生效" : "配置已保存并热应用");
+      notify(data.restart_required ? "配置已保存；旧数据归属需重启后生效" : "配置已保存并热应用");
     }
   } catch (error) {
-    toast(`保存配置失败：${error?.message || String(error)}`, true);
+    notify(`保存配置失败：${error?.message || String(error)}`, true);
   } finally {
     if (button) {
       button.disabled = false;
@@ -384,7 +419,7 @@ async function saveConfig() {
 
 function resetConfigForm() {
   renderConfigForm(configSchema, configValues);
-  toast("已重置为当前生效配置");
+  notify("已重置为当前生效配置");
 }
 
 function accountRow(account = {}) {
@@ -561,7 +596,7 @@ async function quickEditRelationship(index) {
       person = identities.find((item) => item.person_id === user.person_id);
     }
     if (!person) {
-      toast("未找到该自然人的账号归属，请刷新后重试", true);
+      notify("未找到该自然人的账号归属，请刷新后重试", true);
       return;
     }
     editIdentity(person);
@@ -602,7 +637,7 @@ async function quickEditRelationship(index) {
   if (!account.platform_id) missing.push("平台 ID");
   if (!account.bot_id) missing.push("Bot ID");
   if (!account.session_id) missing.push("私聊 UMO");
-  toast(missing.length
+  notify(missing.length
     ? `已填入可确认字段；缺少${missing.join("、")}，请先私聊 Bot 一次后刷新`
     : "已自动填入最近一次真实私聊的账号信息，请确认后保存");
   scrollToIdentityEditor();
@@ -630,7 +665,7 @@ function armDeleteIdentity(personId) {
   clearTimeout(pendingDeleteTimer);
   pendingDeleteTimer = setTimeout(() => clearDeleteConfirmation(), 8000);
   renderIdentityList();
-  toast("请先确认关系迁回账号，再在 8 秒内点击“确认解除”；原有白名单资格和记忆数据都会保留");
+  notify("请先确认关系迁回账号，再在 8 秒内点击“确认解除”；原有白名单资格和记忆数据都会保留");
 }
 
 function renderIdentityList() {
@@ -728,17 +763,17 @@ async function saveIdentity() {
     if (result?.initial_prior?.requested === true && result.initial_prior.applied !== true) {
       const errorCode = result.initial_prior.error || "INITIAL_PRIOR_REJECTED";
       if (errorCode === "RELATIONSHIP_ALREADY_ACTIVE") {
-        toast("账号归属已保存；该关系已有互动，已保留现有关系");
+        notify("账号归属已保存；该关系已有互动，已保留现有关系");
       } else if (errorCode === "INITIAL_PRIOR_ALREADY_APPLIED") {
-        toast("账号归属已保存；该关系已设置过固定初始关系，只有白名单关系可以调整");
+        notify("账号归属已保存；该关系已设置过固定初始关系，只有白名单关系可以调整");
       } else {
-        toast(`账号归属已保存，但初始关系未应用（${errorCode}）`, true);
+        notify(`账号归属已保存，但初始关系未应用（${errorCode}）`, true);
       }
     } else {
-      toast(result?.initial_prior?.applied === true ? "账号归属和初始关系已保存" : "账号归属已保存");
+      notify(result?.initial_prior?.applied === true ? "账号归属和初始关系已保存" : "账号归属已保存");
     }
   } catch (error) {
-    toast(`保存失败：${error?.message || String(error)}`, true);
+    notify(`保存失败：${error?.message || String(error)}`, true);
     button.textContent = originalLabel;
   } finally {
     button.disabled = false;
@@ -757,9 +792,9 @@ async function mergeIdentity() {
     clearTimeout(identityMergeConfirmTimer);
     identityMergeConfirmTimer = setTimeout(() => {
       resetIdentityMergeConfirmation();
-      toast("合并确认已取消，请重新选择");
+      notify("合并确认已取消，请重新选择");
     }, 8000);
-    toast("请在 8 秒内再次点击“确认合并”；来源身份将不再单独保留");
+    notify("请在 8 秒内再次点击“确认合并”；来源身份将不再单独保留");
     return;
   }
 
@@ -783,11 +818,11 @@ async function mergeIdentity() {
     await Promise.all([loadIdentities(), load()]);
     resetIdentityEditor();
     const subject = result?.source_kind === "account" ? "账号" : "身份";
-    toast(result?.state_merged
+    notify(result?.state_merged
       ? `${subject}及已有关系已合并`
       : `${subject}已合并；没有发现需迁移的独立关系状态`);
   } catch (error) {
-    toast(`合并失败：${error?.message || String(error)}`, true);
+    notify(`合并失败：${error?.message || String(error)}`, true);
     button.disabled = false;
     button.setAttribute("aria-busy", "false");
     button.dataset.confirmed = "";
@@ -802,7 +837,7 @@ async function deleteIdentity(personId, button) {
   const targetIndex = Number(item?.querySelector("[data-unbind-target]")?.value ?? 0);
   const restoreAccount = (person.accounts || [])[targetIndex];
   if (!restoreAccount) {
-    toast("没有可承接关系的账号，请先编辑账号归属", true);
+    notify("没有可承接关系的账号，请先编辑账号归属", true);
     return;
   }
   button.disabled = true;
@@ -827,11 +862,11 @@ async function deleteIdentity(personId, button) {
     const whitelistNote = aliases
       ? `；原有白名单资格已保留，并补充了 ${aliases} 个账号写法`
       : "；原有白名单资格保持不变";
-    toast(result?.state_migrated
+    notify(result?.state_migrated
       ? `自然人归属已解除，现有关系已迁回 ${target}${whitelistNote}`
       : `自然人归属已解除；当前没有需要迁移的关系${whitelistNote}`);
   } catch (error) {
-    toast(`解除归属失败：${error?.message || String(error)}`, true);
+    notify(`解除归属失败：${error?.message || String(error)}`, true);
     renderIdentityList();
   }
 }
@@ -853,7 +888,7 @@ function clearRelationshipDeleteConfirmation() {
 function expireRelationshipDeleteConfirmation() {
   if (!pendingRelationshipDeleteKey) return;
   clearRelationshipDeleteConfirmation();
-  toast("删除关系确认已取消，请重新选择要删除的人格");
+  notify("删除关系确认已取消，请重新选择要删除的人格");
 }
 
 function armRelationshipDelete(index, button) {
@@ -868,13 +903,14 @@ function armRelationshipDelete(index, button) {
   if (multipleProfiles) {
     button.disabled = true;
     button.dataset.awaitingProfile = "true";
-    button.closest(".row-actions")?.insertAdjacentHTML(
+    const dataRow = button.closest("tr");
+    dataRow?.insertAdjacentHTML(
       "afterend",
-      relationshipDeleteProfilePicker(profiles),
+      `<tr class="relationship-detail-row"><td colspan="12">${relationshipDeleteProfilePicker(profiles)}</td></tr>`,
     );
   }
   pendingRelationshipDeleteTimer = setTimeout(expireRelationshipDeleteConfirmation, 8000);
-  toast(multipleProfiles
+  notify(multipleProfiles
     ? "请选择一个关系人格，再次点击“确认删除所选人格”；本次不会改动其他人格"
     : `请在 8 秒内再次点击“确认删除关系”；本次只删除人格“${profiles[0]}”的关系记录，白名单设置不变`);
 }
@@ -901,10 +937,10 @@ async function saveRelationshipType(index, select) {
     await apiPost("relationship-type", payload);
     user.relationship_type = relationshipType;
     const label = relationshipTypeLabels[relationshipType] || relationshipType;
-    toast(`关系性质已设置为「${label}」${intimateRelationshipTypes.has(relationshipType) ? "，将放行恋人级亲密表达" : "，将保持相应关系边界"}`);
+    notify(`关系性质已设置为「${label}」${intimateRelationshipTypes.has(relationshipType) ? "，将放行恋人级亲密表达" : "，将保持相应关系边界"}`);
   } catch (error) {
     select.value = user.relationship_type || "friend";
-    toast(`设置关系性质失败：${error?.message || String(error)}`, true);
+    notify(`设置关系性质失败：${error?.message || String(error)}`, true);
   } finally {
     select.disabled = false;
   }
@@ -922,7 +958,7 @@ async function deleteRelationship(index, button) {
     ? String(picker?.value || pendingRelationshipDeleteProfileId || "").trim()
     : profiles[0];
   if (!selectedProfile || !profiles.includes(selectedProfile)) {
-    toast("请选择要删除的关系人格；本次只会删除所选人格", true);
+    notify("请选择要删除的关系人格；本次只会删除所选人格", true);
     return;
   }
   const personId = user.person_id || user.orphaned_person_id || "";
@@ -945,10 +981,10 @@ async function deleteRelationship(index, button) {
   try {
     await apiPost("relationship-delete", payload);
     await load();
-    toast(`人格“${selectedProfile}”的关系记录已删除；其他人格和高好感白名单设置未改动`);
+    notify(`人格“${selectedProfile}”的关系记录已删除；其他人格和高好感白名单设置未改动`);
   } catch (error) {
     clearRelationshipDeleteConfirmation();
-    toast(`删除关系失败：${error?.message || String(error)}`, true);
+    notify(`删除关系失败：${error?.message || String(error)}`, true);
   }
 }
 
@@ -1016,6 +1052,17 @@ function initTabs() {
 
 function bindPageEvents() {
   initTabs();
+  $("#relation-search")?.addEventListener("input", (event) => {
+    relationshipQuery = event.target.value;
+    relationshipVisible = relationshipPageSize;
+    renderRelationshipTable(overviewUsers);
+  });
+  $("#relation-progressive")?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-relation-more]")) relationshipVisible += relationshipPageSize;
+    else if (event.target.closest("[data-relation-collapse]")) relationshipVisible = relationshipPageSize;
+    else return;
+    renderRelationshipTable(overviewUsers);
+  });
   initIdentityEditor();
   $("#btn-refresh").addEventListener("click", load);
   $("#btn-save-config").addEventListener("click", saveConfig);
@@ -1042,7 +1089,7 @@ function bindPageEvents() {
     const cancelButton = event.target.closest("[data-cancel-delete-relationship]");
     if (cancelButton) {
       clearRelationshipDeleteConfirmation();
-      toast("已取消删除关系");
+      notify("已取消删除关系");
       return;
     }
     const deleteButton = event.target.closest("[data-delete-relationship]");
@@ -1086,7 +1133,7 @@ async function init() {
 }
 
 init().catch((error) => {
-  toast(`页面启动失败：${error?.message || String(error)}`, true);
+  notify(`页面启动失败：${error?.message || String(error)}`, true);
   $("#relation-tbody").innerHTML = '<tr class="empty-row"><td colspan="12">页面启动失败</td></tr>';
   const configForm = $("#config-form");
   if (configForm) configForm.innerHTML = '<p class="config-loading">页面启动失败，无法加载配置</p>';

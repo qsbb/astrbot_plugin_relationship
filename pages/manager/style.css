@@ -271,6 +271,11 @@ body[data-series-ui] .relationship-detail-row td {
   background: rgba(105, 115, 158, .07);
 }
 
+body[data-series-ui] .relationship-detail-row .relationship-delete-confirmation {
+  max-width: 760px;
+  margin-left: 0;
+}
+
 .relationship-delete-confirmation label {
   display: grid;
   gap: 5px;
@@ -292,25 +297,6 @@ body[data-series-ui] .relationship-delete-confirmation select {
   grid-column: 1 / -1;
   color: var(--si-muted);
   line-height: 1.45;
-}
-
-/* #toast 保留原有单一提示节点，并复用共享 .toast 表面。 */
-#toast {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 900;
-  max-width: calc(100vw - 48px);
-  margin: 0;
-  opacity: 1;
-  transform: none;
-  transition: opacity var(--si-transition), transform var(--si-transition);
-  pointer-events: none;
-}
-
-#toast.hidden {
-  opacity: 0;
-  transform: translateY(10px);
 }
 
 .icon-command {
@@ -653,8 +639,6 @@ body[data-series-ui] .config-input input[type="checkbox"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #toast,
   .identity-item,
   .bar-fill { transition: none; }
-  #toast.hidden { transform: none; }
 }
