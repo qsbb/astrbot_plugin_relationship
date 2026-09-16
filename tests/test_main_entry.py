@@ -3496,6 +3496,58 @@ class ConfigBaselineTest(unittest.TestCase):
         self.assertNotIn(main._BASELINE_KEY, plugin._merged_config())
         self.assertNotIn(main._BASELINE_KEY, plugin._public_config())
 
+    # -- 核「一键固化 / 一键读取」 ---------------------------------------
+
+    def test_native_write_persists_backs_up_and_updates_native_value(self) -> None:
+        """一键固化：写插件自身配置 + 备份 + 运行时/快照同步（核掉线后仍生效）。"""
+        self.config_path.write_text(
+            json.dumps({"MOOD_WINDOW_SECONDS": 600}), encoding="utf-8"
+        )
+        native = FakeNativeConfig({"CROSS_PLATFORM_MEMORY_TOP_K": 3})
+        plugin = self._build(native)
+
+        result = plugin.series_control_native_write({"cross_platform_memory_top_k": 7})
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["reason"], "APPLIED")
+        self.assertEqual(result["written"], ["cross_platform_memory_top_k"])
+        self.assertTrue(result["backup_id"])
+
+        stored = self._stored()
+        self.assertEqual(stored["CROSS_PLATFORM_MEMORY_TOP_K"], 7)
+        self.assertEqual(stored["MOOD_WINDOW_SECONDS"], 600)
+        self.assertEqual(native["CROSS_PLATFORM_MEMORY_TOP_K"], 7)
+        self.assertEqual(native.save_calls, 1)
+
+        backup = self.config_path.with_name(f"native-backup-{result['backup_id']}.json")
+        self.assertTrue(backup.is_file())
+        backup_body = json.loads(backup.read_text(encoding="utf-8"))
+        self.assertEqual(backup_body["MOOD_WINDOW_SECONDS"], 600)
+        self.assertNotIn("CROSS_PLATFORM_MEMORY_TOP_K", backup_body)
+
+        self.assertEqual(plugin._cross_platform_memory_top_k, 7)
+        fields = plugin.series_control_snapshot()["fields"]
+        self.assertEqual(fields["cross_platform_memory_top_k"]["native_value"], 7)
+        self.assertEqual(fields["cross_platform_memory_top_k"]["effective_value"], 7)
+
+    def test_native_write_rejects_unknown_field_and_bad_type(self) -> None:
+        """一键固化只接受契约白名单字段，类型错误直接拒绝且不落盘。"""
+        plugin = self._build(FakeNativeConfig({}))
+        self.assertEqual(
+            plugin.series_control_native_write({"person_id": "u1"})["reason"],
+            "UNKNOWN_FIELD",
+        )
+        self.assertEqual(
+            plugin.series_control_native_write({"mood_enabled": "yes"})["reason"],
+            "INVALID_TYPE",
+        )
+        self.assertEqual(
+            plugin.series_control_native_write(
+                {"cross_platform_memory_top_k": 99}
+            )["reason"],
+            "INVALID_VALUE",
+        )
+        self.assertFalse(self.config_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

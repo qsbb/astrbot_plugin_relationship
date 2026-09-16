@@ -6,7 +6,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 CONTRACT_NAME = "series.control@1.0"
 PLUGIN_ID = "astrbot_plugin_relationship"
@@ -26,6 +26,15 @@ FIELDS = {
         "minimum": 200,
         "maximum": 8000,
     },
+}
+
+# series.control 的逻辑字段名 → 本插件原生配置键（_conf_schema.json 的键）。
+# 一键固化/一键读取必须落在插件真正读取的那份配置上，不能各写各的。
+NATIVE_KEYS = {
+    "mood_enabled": "MOOD_ENABLED",
+    "cross_platform_memory_enabled": "CROSS_PLATFORM_MEMORY_ENABLED",
+    "cross_platform_memory_top_k": "CROSS_PLATFORM_MEMORY_TOP_K",
+    "cross_platform_memory_max_chars": "CROSS_PLATFORM_MEMORY_MAX_CHARS",
 }
 
 
@@ -71,7 +80,22 @@ def _revision(state: dict[str, Any]) -> int:
 
 
 def _native(plugin: Any, name: str) -> Any:
-    return plugin._raw_config.get(name, FIELDS[name]["default"])
+    """插件自身配置（页面 overlay → 插件配置页 → 默认值）的当前值。
+
+    这是「核掉线后插件实际会用」的值，一键读取/一键固化都以它为准。
+    """
+    key = NATIVE_KEYS.get(name, name)
+    default = FIELDS[name]["default"]
+    getter = getattr(plugin, "_get", None)
+    if callable(getter):
+        try:
+            return getter(key, default)
+        except Exception:
+            return default
+    raw = getattr(plugin, "_raw_config", None)
+    if isinstance(raw, Mapping):
+        return raw.get(key, default)
+    return default
 
 
 def _write(plugin: Any, state: dict[str, Any]) -> None:
@@ -101,9 +125,11 @@ def contract(plugin: Any) -> dict[str, Any]:
         "capabilities": [
             "read_schema",
             "read_snapshot",
+            "read_native",
             "validate_patch",
             "apply_patch",
             "reset_override",
+            "write_native",
         ],
         "read_only": False,
         "secrets_in_response": False,
@@ -143,24 +169,71 @@ def _effective(
     )
 
 
+def _native_configured(plugin: Any, name: str) -> bool:
+    key = NATIVE_KEYS.get(name, name)
+    raw = getattr(plugin, "_raw_config", None)
+    if isinstance(raw, Mapping) and key in raw:
+        return True
+    overrides = getattr(plugin, "_config_overrides", None)
+    if isinstance(overrides, Mapping) and key in overrides:
+        return True
+    return False
+
+
 def snapshot(plugin: Any) -> dict[str, Any]:
     state = _load(plugin)
     overrides = _clean(state.get("overrides"))
     managed = getattr(plugin, "_series_control_mode", "native") == "managed"
+    fields: dict[str, Any] = {}
+    for name, spec in FIELDS.items():
+        item = {
+            "native_configured": _native_configured(plugin, name),
+            "managed_configured": name in overrides,
+            "effective_source": "managed" if managed and name in overrides else "plugin",
+            "effective_value": _effective(plugin, name, state),
+        }
+        # 原生值：供核「一键读取当前配置」使用（secret 字段不回传）
+        if spec.get("secret") or spec.get("write_only"):
+            item["secret"] = True
+        else:
+            item["native_value"] = _native(plugin, name)
+        fields[name] = item
     return {
         "status": "ok",
         "revision": _revision(state),
-        "fields": {
-            name: {
-                "native_configured": name in plugin._raw_config,
-                "managed_configured": name in overrides,
-                "effective_source": "managed"
-                if managed and name in overrides
-                else "plugin",
-                "effective_value": _effective(plugin, name, state),
-            }
-            for name in FIELDS
-        },
+        "fields": fields,
+    }
+
+
+def native_write(
+    plugin: Any, patch: Any, *, expected_revision: int | None = None
+) -> dict[str, Any]:
+    """一键固化：把当前值写进插件自身配置（核掉线后仍按此运行）。
+
+    只接受 FIELDS 内的字段；先按白名单 + 类型/范围校验，再交给插件层
+    「备份 → 合并 → 原子落盘」。
+    """
+    state = _load(plugin)
+    current = _revision(state)
+    revision = current if expected_revision is None else expected_revision
+    result = validate(plugin, patch, expected_revision=revision)
+    if not result.get("valid"):
+        return result
+    clean = dict(result.get("patch") or {})
+    hook = getattr(plugin, "_apply_native_series_control_values", None)
+    if not callable(hook):
+        return {"status": "error", "reason": "UNSUPPORTED", "revision": current}
+    outcome = hook(clean)
+    if not isinstance(outcome, dict) or outcome.get("status") != "ok":
+        reason = str((outcome or {}).get("reason") or "PERSIST_FAILED")
+        return {"status": "error", "reason": reason, "revision": current}
+    return {
+        "status": "ok",
+        "reason": "APPLIED",
+        "revision": current,
+        "written": list(outcome.get("written") or clean.keys()),
+        "skipped": list(outcome.get("skipped") or []),
+        "backup_id": str(outcome.get("backup_id") or ""),
     }
 
 
@@ -325,6 +398,11 @@ class SeriesControlAdapter:
 
     def series_control_snapshot(self):
         return snapshot(self.plugin)
+
+    def series_control_native_write(self, patch, *, expected_revision=None):
+        return native_write(
+            self.plugin, patch, expected_revision=expected_revision
+        )
 
     def validate_series_control_patch(self, patch, *, expected_revision):
         return validate(self.plugin, patch, expected_revision=expected_revision)

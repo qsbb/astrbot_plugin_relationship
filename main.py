@@ -24,6 +24,7 @@ import secrets
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 try:
@@ -107,11 +108,11 @@ from .series_diagnostics import (
     diagnostic_events as read_diagnostic_events,
     logger,
 )
-from .series_control import SeriesControlAdapter
+from .series_control import NATIVE_KEYS, SeriesControlAdapter
 from .series_webui import RelationshipWebUIAdapter
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.12.5"
+__version__ = "0.12.6"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -273,6 +274,89 @@ class RelationshipPlugin(Star):
 
     def series_control_snapshot(self):
         return self._series_control.series_control_snapshot()
+
+    def series_control_native_write(self, patch, *, expected_revision=None):
+        """一键固化入口（核调用）：把值写进本插件自己的配置文件。"""
+        return self._series_control.series_control_native_write(
+            patch, expected_revision=expected_revision
+        )
+
+    def _backup_native_config(self) -> str:
+        """写原生配置前先备份，返回 backup_id（写入失败可人工/自动恢复）。"""
+        try:
+            path = self._data_dir / _CONFIG_STORE_NAME
+            if not path.is_file():
+                return ""
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            backup = path.with_name(f"native-backup-{stamp}.json")
+            backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+            return stamp
+        except Exception as exc:
+            self.logger.warning("[rel] native backup failed: %s", exc)
+            return ""
+
+    def _apply_native_series_control_values(self, values):
+        """一键固化：把核接管值写进插件自身配置（页面 overlay + 插件配置页）。
+
+        顺序：备份 → 校验 → 写插件配置页 + 原子落盘 → 刷新运行时；
+        落盘失败回滚内存，运行时刷新失败回滚内存并尽力还原磁盘。
+        """
+        if not isinstance(values, dict) or not values:
+            return {"status": "error", "reason": "INVALID_PATCH"}
+        schema = self._schema()
+        changes: dict[str, Any] = {}
+        for name, value in values.items():
+            key = NATIVE_KEYS.get(name, name)
+            field = schema.get(key)
+            if not isinstance(field, dict):
+                return {"status": "error", "reason": f"UNKNOWN_FIELD:{name}"}
+            try:
+                changes[key] = self._coerce_page_value(key, value, field)
+            except (TypeError, ValueError):
+                return {"status": "error", "reason": f"INVALID_VALUE:{name}"}
+
+        backup_id = self._backup_native_config()
+        previous_overrides = dict(self._config_overrides)
+        previous_baseline = dict(self._config_baseline)
+
+        native_ok = False
+        if self._native_config is not None:
+            try:
+                self._native_config.update(changes)
+                self._native_config.save_config()
+                native_ok = True
+            except Exception:
+                native_ok = False
+
+        baseline_snapshot = dict(self._config_baseline)
+        self._record_baseline(changes, native_ok)
+        try:
+            self._config_store_write({**previous_overrides, **changes})
+        except OSError as exc:
+            self._config_baseline = baseline_snapshot
+            return {"status": "error", "reason": f"PERSIST_FAILED:{exc}"}
+
+        self._config_overrides = {**previous_overrides, **changes}
+        try:
+            self._apply_runtime_config()
+        except Exception as exc:
+            self._config_overrides = previous_overrides
+            self._config_baseline = previous_baseline
+            try:
+                self._config_store_write(previous_overrides)
+            except OSError:
+                pass
+            try:
+                self._apply_runtime_config()
+            except Exception:
+                pass
+            return {"status": "error", "reason": f"APPLY_FAILED:{exc}"}
+        return {
+            "status": "ok",
+            "written": sorted(values.keys()),
+            "skipped": [],
+            "backup_id": backup_id,
+        }
 
     def validate_series_control_patch(self, patch, *, expected_revision: int):
         return self._series_control.validate_series_control_patch(
