@@ -66,6 +66,7 @@
   min-width: 128px;
   padding: 10px 18px;
   font-size: 14px;
+  white-space: nowrap;
 }
 
 .panel { display: none; }
@@ -574,7 +575,6 @@ body[data-series-ui] .relationship-table tbody tr.relationship-detail-row > td {
   border: 1px solid rgba(209, 75, 90, .28);
   border-radius: var(--si-radius-sm);
   background: var(--si-danger-soft);
-  white-space: normal;
 }
 
 .relationship-delete-confirmation label {
@@ -1014,8 +1014,6 @@ body[data-series-ui] .config-group[open] .config-group-title::before { transform
 
 body[data-series-ui] .config-group[open] > summary { border-bottom: 1px solid var(--si-line-solid); }
 
-.config-group-body { padding: 16px 15px 4px; }
-
 .config-field[hidden],
 details.config-group[hidden] { display: none; }
 
@@ -1169,7 +1167,7 @@ body[data-series-ui] .config-input input[type="checkbox"] {
   .section-heading { align-items: flex-start; flex-direction: column; }
 
   .toolbar { width: 100%; justify-content: flex-start; }
-  .toolbar > * { flex: 1 1 auto; }
+  .toolbar > * { flex: 0 0 auto; }
 
   .tabs .tab-btn { flex: 1 1 45%; min-width: 0; }
 

@@ -5,7 +5,7 @@ const notify = (message, error = false) => {
     window.SeriesUI.toast(message, error ? "error" : "info");
     return;
   }
-  const fallback = document.querySelector("[data-toast-fallback], #bridge-error, #startup-error, #page-error");
+  const fallback = document.querySelector("[data-toast-fallback]");
   if (fallback) {
     fallback.textContent = String(message || "");
     fallback.hidden = false;
@@ -103,14 +103,11 @@ function idChip(value, label = "标识") {
   return `<button type="button" class="id-chip" data-copy-id="${escapeHtml(text)}" title="点击复制完整值：${escapeHtml(text)}" aria-label="复制${escapeHtml(label)}：${escapeHtml(text)}">${escapeHtml(shortId(text))}</button>`;
 }
 
+// 惰性别名：优先共享 SeriesUI.escapeHtml，SeriesUI 未加载时回退到等价实现。
+const HTML_ESCAPE_FALLBACK = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
+
 function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#39;"
-  })[ch]);
+  return (window.SeriesUI?.escapeHtml || HTML_ESCAPE_FALLBACK)(value);
 }
 
 function formatTime(ts) {
@@ -165,26 +162,34 @@ async function resolveBridge(timeout = 3000) {
   throw new Error("请从 AstrBot 插件管理页打开此页面");
 }
 
-function parseJsonResponse(value) {
-  const data = typeof value === "string" ? JSON.parse(value) : value;
-  if (data?.success === false) {
-    throw new Error(API_ERROR_MESSAGES[data.error] || data.error || data.detail || "请求失败");
+// 惰性别名：首次调用时才经 SeriesUI.makeApi 创建，SeriesUI 未加载不阻塞模块加载。
+let sharedApi = null;
+
+function pageApi() {
+  if (sharedApi) return sharedApi;
+  if (typeof window.SeriesUI?.makeApi !== "function") {
+    throw new Error("AstrBot 页面通信接口尚未就绪");
   }
-  return data?.data ?? data;
+  sharedApi = window.SeriesUI.makeApi({
+    get: (name) => bridge.apiGet(name),
+    post: (name, payload) => bridge.apiPost(name, payload),
+    errorMessages: API_ERROR_MESSAGES,
+  });
+  return sharedApi;
 }
 
 async function apiGet(name) {
   if (!bridge || typeof bridge.apiGet !== "function") {
     throw new Error("AstrBot 页面通信接口尚未就绪");
   }
-  return parseJsonResponse(await bridge.apiGet(name));
+  return pageApi().get(name);
 }
 
 async function apiPost(name, body) {
   if (!bridge || typeof bridge.apiPost !== "function") {
     throw new Error("AstrBot 页面通信接口尚未就绪");
   }
-  return parseJsonResponse(await bridge.apiPost(name, body));
+  return pageApi().post(name, body);
 }
 
 function render(payload) {
@@ -478,10 +483,15 @@ function toggleRelationshipDetail(index) {
 
 async function load() {
   const button = $("#btn-refresh");
+  const sharedSetBusy = typeof window.SeriesUI?.setBusy === "function" ? window.SeriesUI.setBusy : null;
   if (button) {
-    button.disabled = true;
     button.setAttribute("aria-busy", "true");
-    button.textContent = "刷新中…";
+    if (sharedSetBusy) {
+      sharedSetBusy(button, true, "刷新中…");
+    } else {
+      button.disabled = true;
+      button.textContent = "刷新中…";
+    }
   }
   try {
     relationshipVisible = relationshipPageSize();
@@ -494,9 +504,13 @@ async function load() {
     updateFreshness(true);
   } finally {
     if (button) {
-      button.disabled = false;
+      if (sharedSetBusy) {
+        sharedSetBusy(button, false);
+      } else {
+        button.disabled = false;
+        button.textContent = "刷新";
+      }
       button.setAttribute("aria-busy", "false");
-      button.textContent = "刷新";
     }
   }
 }
@@ -626,7 +640,12 @@ function hasUnsavedChanges() {
   return [...document.querySelectorAll("#config-form [data-key]")].some(fieldIsDirty);
 }
 
-const showUnsavedConfirm = window.SeriesUI.confirm;
+// 惰性获取共享确认框：SeriesUI 未加载时回退为“取消”，notify 等 DOM 回退链才真正可达。
+function showUnsavedConfirm(options) {
+  return window.SeriesUI?.confirm
+    ? window.SeriesUI.confirm(options)
+    : Promise.resolve(false);
+}
 
 async function confirmDiscardChanges() {
   if (!hasUnsavedChanges()) return true;
@@ -639,8 +658,10 @@ async function confirmDiscardChanges() {
   })) === true;
 }
 
-function discardConfigChanges() {
+function discardConfigChanges({ silent = true } = {}) {
+  // renderConfigForm 末尾已刷新未保存计数，无需重复调用 updateConfigDirtyState。
   renderConfigForm(configSchema, configValues);
+  if (!silent) notify("已重置为当前生效配置");
 }
 
 function updateConfigDirtyState() {
@@ -703,26 +724,14 @@ function collectConfigChanges() {
   const invalid = [];
   document.querySelectorAll("#config-form [data-key]").forEach((el) => {
     const key = el.dataset.key;
-    if (el.type === "checkbox") {
-      if (el.checked !== configValues[key]) changes[key] = el.checked;
-    } else {
-      const raw = el.value;
-      const field = configSchema[key];
-      if (!field) return;
-      let value;
-      if (field.type === "int") {
-        value = parseInt(raw, 10);
-      } else if (field.type === "float") {
-        value = parseFloat(raw);
-      } else {
-        value = raw;
-      }
-      if ((field.type === "int" || field.type === "float") && Number.isNaN(value)) {
-        invalid.push(field.description || key);
-        return;
-      }
-      if (!Object.is(value, configValues[key])) changes[key] = value;
+    const field = configSchema[key];
+    if (el.type !== "checkbox" && !field) return;
+    const value = fieldValueFromElement(el);
+    if (value === undefined) {
+      invalid.push(field.description || key);
+      return;
     }
+    if (!Object.is(value, configValues[key])) changes[key] = value;
   });
   return { changes, invalid };
 }
@@ -762,9 +771,7 @@ async function saveConfig() {
 }
 
 function resetConfigForm() {
-  renderConfigForm(configSchema, configValues);
-  updateConfigDirtyState();
-  notify("已重置为当前生效配置");
+  discardConfigChanges({ silent: false });
 }
 
 function accountRow(account = {}) {
@@ -1289,9 +1296,7 @@ function clearRelationshipDeleteConfirmation(rerender = true) {
   pendingRelationshipDeleteProfileId = "";
   clearTimeout(pendingRelationshipDeleteTimer);
   pendingRelationshipDeleteTimer = null;
-  document.querySelectorAll("[data-relationship-delete-confirmation]").forEach((element) => element.remove());
-  document.querySelectorAll("[data-delete-confirmation-row]").forEach((element) => element.remove());
-  document.querySelectorAll("[data-cancel-delete-relationship]").forEach((element) => element.remove());
+  // 确认区节点由 renderRelationshipTable 的 innerHTML 重绘整体覆盖，无需手动移除。
   if (rerender) renderRelationshipTable(overviewUsers);
 }
 
@@ -1384,7 +1389,7 @@ async function deleteRelationship(index, button) {
   try {
     await apiPost("relationship-delete", payload);
     await load();
-    notify(`人格“${selectedProfile}”的关系记录已删除；其他人格和高好感白名单设置未改动`);
+    notify(`已删除人格“${selectedProfile}”的关系记录`);
   } catch (error) {
     clearRelationshipDeleteConfirmation();
     notify(`删除关系失败：${error?.message || String(error)}`, true);
@@ -1530,7 +1535,7 @@ function bindPageEvents() {
   });
   $("#auto-refresh")?.addEventListener("change", (event) => {
     setAutoRefresh(event.target.checked);
-    notify(event.target.checked ? "已开启自动刷新（60 秒）" : "已关闭自动刷新");
+    notify(event.target.checked ? "已开启自动刷新" : "已关闭自动刷新");
   });
   window.setInterval(updateFreshness, 15000);
   $("#relation-search")?.addEventListener("input", (event) => {

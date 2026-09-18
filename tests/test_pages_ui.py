@@ -118,7 +118,8 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("data-cancel-delete-relationship", self.js)
         self.assertIn("function expireRelationshipDeleteConfirmation()", self.js)
         self.assertIn("setTimeout(expireRelationshipDeleteConfirmation, 8000)", self.js)
-        self.assertIn(
+        # 确认区节点由 renderRelationshipTable 的 innerHTML 重绘覆盖，不再手动移除
+        self.assertNotIn(
             'querySelectorAll("[data-relationship-delete-confirmation]")', self.js
         )
         self.assertIn(
@@ -267,10 +268,10 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("只有白名单关系可以调整", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.12.6-1", self.html)
-        self.assertIn("series-ui.css?v=0.12.6-1", self.html)
-        self.assertIn("series-ui.js?v=0.12.6-1", self.html)
-        self.assertIn("app.js?v=0.12.6-1", self.html)
+        self.assertIn("style.css?v=0.12.7-1", self.html)
+        self.assertIn("series-ui.css?v=0.12.7-1", self.html)
+        self.assertIn("series-ui.js?v=0.12.7-1", self.html)
+        self.assertIn("app.js?v=0.12.7-1", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)
@@ -433,7 +434,7 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("#panel-settings .settings-sticky", self.css)
         self.assertIn("position: sticky;", self.css)
         self.assertIn(".config-group-title::before", self.css)
-        self.assertIn(".config-group-body", self.css)
+        self.assertNotIn(".config-group-body", self.css)
 
     def test_details_density_is_relaxed(self) -> None:
         """密度：主行 5 列、字号层级拉开，副信息收进展开区。"""
