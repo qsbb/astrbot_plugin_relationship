@@ -1,4 +1,4 @@
-"""凝心溯溪-情 页面 UI 静态检查。
+"""情 页面 UI 静态检查。
 
 验证 pages/manager/ 下的 HTML、JS、CSS 文件包含设置 tab 所需的结构和交互逻辑，
 不依赖 AstrBot 运行时，可离线运行：
@@ -268,10 +268,10 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("只有白名单关系可以调整", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.12.7-1", self.html)
-        self.assertIn("series-ui.css?v=0.12.7-1", self.html)
-        self.assertIn("series-ui.js?v=0.12.7-1", self.html)
-        self.assertIn("app.js?v=0.12.7-1", self.html)
+        self.assertIn("style.css?v=0.13.0-1", self.html)
+        self.assertIn("series-ui.css?v=0.13.0-1", self.html)
+        self.assertIn("series-ui.js?v=0.13.0-1", self.html)
+        self.assertIn("app.js?v=0.13.0-1", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)

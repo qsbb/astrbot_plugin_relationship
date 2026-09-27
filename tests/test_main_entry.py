@@ -1,4 +1,4 @@
-"""凝心溯溪-情 入口级测试。
+"""情 入口级测试。
 
 使用 mock 的 astrbot 运行时模块测试 main.py 的插件入口：
 - /rel status 与 /rel reset 命令解析；

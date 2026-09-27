@@ -1,4 +1,4 @@
-"""凝心溯溪-情 核心逻辑测试。
+"""情 核心逻辑测试。
 
 不依赖 AstrBot 运行时，时间与随机源全部注入，可离线运行：
     python -m unittest discover -s tests -v

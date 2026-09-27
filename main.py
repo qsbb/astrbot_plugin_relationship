@@ -1,4 +1,4 @@
-"""凝心溯溪-情：AstrBot 关系状态插件入口。
+"""情：AstrBot 关系状态插件入口。
 
 本入口负责 AstrBot 适配与只读关系快照契约：
 - 在 on_llm_request 阶段记录互动；
@@ -112,7 +112,7 @@ from .series_control import NATIVE_KEYS, SeriesControlAdapter
 from .series_webui import RelationshipWebUIAdapter
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.12.7"
+__version__ = "0.13.0"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"
@@ -146,7 +146,7 @@ _PUBLIC_EVENT_KINDS = tuple(sorted(SEMANTIC_KINDS - {KIND_INITIAL_PRIOR}))
 @register(
     PLUGIN_NAME,
     "凌溪",
-    "凝心溯溪-情，统一管理情绪、好感、信任与熟悉度",
+    "情，统一管理情绪、好感、信任与熟悉度",
     __version__,
 )
 class RelationshipPlugin(Star):
@@ -225,7 +225,7 @@ class RelationshipPlugin(Star):
         self._apply_log_level()
         self._register_pages_web_api()
         RelationshipPlugin._current_instance = self
-        self.logger.info("[relationship] 凝心溯溪-情 v%s 已加载", __version__)
+        self.logger.info("[relationship] 情 v%s 已加载", __version__)
         diagnostic_event(
             "plugin.ready",
             "关系插件初始化完成",
@@ -3273,7 +3273,7 @@ class RelationshipPlugin(Star):
 
     @filter.command_group("rel")
     def rel_group(self):
-        """凝心溯溪-情指令组。"""
+        """「情」指令组。"""
         pass
 
     @rel_group.command("status")
@@ -3288,7 +3288,7 @@ class RelationshipPlugin(Star):
         snapshot = await plugin.manager.get_snapshot_for_scope(scope)
         mood_names = {"normal": "平常", "lazy": "慵懒", "annoyed": "烦躁"}
         lines = [
-            f"凝心溯溪-情 v{__version__}",
+            f"情 v{__version__}",
             f"当前会话: {'私聊' if scope.is_private else '群聊'}",
             f"关系人格: {scope.relationship_profile_id}",
             f"关系性质: {RELATIONSHIP_TYPE_LABELS.get(snapshot.relationship_type, snapshot.relationship_type)}",
