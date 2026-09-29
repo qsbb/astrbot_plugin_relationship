@@ -179,7 +179,7 @@ class PagesUiTest(unittest.TestCase):
         for column in ("relation-col-user", "relation-col-type", "relation-col-band",
                        "relation-col-time", "relation-col-state"):
             self.assertIn(f'class="{column}"', self.html)
-        for header in ("自然人", "关系性质", "层级", "最近互动", "边界状态"):
+        for header in ("自然人", "关系性质", "层级", "最近互动", "表达分寸"):
             self.assertIn(f'<th scope="col">{header}</th>', self.html)
         self.assertEqual(self.html.count("<col class=\"relation-col-"), 5)
         self.assertEqual(self.html.count('<th scope="col">'), 5)
@@ -188,7 +188,7 @@ class PagesUiTest(unittest.TestCase):
 
     def test_details_main_row_has_five_labeled_cells(self) -> None:
         """主行只放决策必需信息：5 列 data-label 与表头一一对应。"""
-        for label in ("自然人", "关系性质", "层级", "最近互动", "边界状态"):
+        for label in ("自然人", "关系性质", "层级", "最近互动", "表达分寸"):
             self.assertIn(f'data-label="{label}"', self.js)
         self.assertIn("function relationshipMainRow(", self.js)
         self.assertIn("function relationshipDetailMarkup(", self.js)
@@ -233,7 +233,7 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn('data-relation-collapse', self.js)
 
     def test_overview_has_quick_identity_editor(self) -> None:
-        self.assertIn("边界状态", self.html)
+        self.assertIn("表达分寸", self.html)
         self.assertIn('data-quick-edit="${index}"', self.js)
         self.assertIn("async function quickEditRelationship(", self.js)
         self.assertIn('activateTab("identities")', self.js)

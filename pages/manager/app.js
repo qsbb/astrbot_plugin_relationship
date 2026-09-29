@@ -380,7 +380,7 @@ function relationshipDetailMarkup(user, index, profiles, deletePending) {
     `<span class="detail-chip"><i>关系性质</i><b>${escapeHtml(relationshipTypeLabels[currentType])}</b></span>`,
     `<span class="detail-chip"><i>互动</i><b>${escapeHtml(user.interaction_count ?? 0)} 次</b></span>`,
     `<span class="detail-chip"><i>白名单</i><b>${user.whitelisted ? "已加入" : "普通"}</b></span>`,
-    `<span class="detail-chip"><i>边界</i><b>${escapeHtml(user.boundary || "谨慎")}</b></span>`,
+    `<span class="detail-chip"><i>表达分寸</i><b>${escapeHtml(user.boundary === "开放" ? "可亲近" : "谨慎")}</b></span>`,
     `<span class="detail-chip"><i>范围</i><b>${user.scope_kind === "person" ? "自然人" : "平台账号"}</b></span>`,
   ].join("");
   const picker = deletePending && multipleProfiles
@@ -421,8 +421,8 @@ function relationshipMainRow(user, index, profiles, expanded, deletePending) {
     + `<span><b>${escapeHtml(user.familiarity)}</b><i>熟悉</i></span>`
     + `</div>`;
   const boundary = user.boundary === "开放"
-    ? '<span class="badge safe">开放</span>'
-    : '<span class="badge warn">谨慎</span>';
+    ? '<span class="badge safe" title="仅表示表达分寸，不代表工具权限">可亲近</span>'
+    : '<span class="badge warn" title="仅表示表达分寸，不代表工具权限">谨慎</span>';
   return `<tr class="relationship-data-row${expanded ? " is-expanded" : ""}"`
     + ` data-relation-index="${index}" data-relationship-key="${escapeHtml(relationshipDeleteKey(user))}">`
     + `<td data-label="自然人"><div class="relation-person">`
@@ -431,7 +431,7 @@ function relationshipMainRow(user, index, profiles, expanded, deletePending) {
     + `<td data-label="层级"><div class="relation-band">`
     + `<span class="band-chip">${escapeHtml(user.band)}</span>${scores}</div></td>`
     + `<td data-label="最近互动"><span class="relation-time">${formatTime(user.last_event_at)}</span></td>`
-    + `<td data-label="边界状态"><div class="relation-state">${boundary}`
+    + `<td data-label="表达分寸"><div class="relation-state">${boundary}`
     + `<div class="row-actions">`
     + `<button type="button" class="quick-edit-command" data-quick-edit="${index}">${actionLabel}</button>`
     + `<button type="button" class="relation-toggle-command" data-relation-toggle="${index}"`

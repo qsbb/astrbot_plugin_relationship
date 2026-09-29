@@ -99,6 +99,40 @@ RELATIONSHIP_TYPES_ALLOWING_INTIMATE = frozenset(
 )
 
 
+def normalize_relationship_type(value: object) -> str:
+    """把历史中文别名归一为内部关系值；无法识别时按普通朋友处理。"""
+    raw = str(value or "friend").strip()
+    if not raw:
+        return "friend"
+    aliases = RELATIONSHIP_TYPE_ALIASES
+    return aliases.get(raw, aliases.get(raw.lower(), "friend"))
+
+
+def is_intimate_relationship_type(value: object) -> bool:
+    """是否由管理员显式标记为放行恋人级亲密表达的关系性质。"""
+    return normalize_relationship_type(value) in {"lover", "exclusive"}
+
+
+# 关系边界规则正本：只描述“关系性质”，不授予任何工具权限。
+# 由“情”的 policy 与 prompts 共同引用，确保最终注入块里只出现一条、且不自相矛盾。
+NON_INTIMATE_BOUNDARY_RULE = (
+    "关系状态只表示熟悉、好感和信任，不等于恋爱、主从、占有或排他关系；"
+    "不要使用归属式承诺（例如‘归你’‘属于你’‘只属于你’），"
+    "也不要把朋友式互动升级成亲密关系。"
+)
+INTIMATE_BOUNDARY_RULE = (
+    "关系已被明确标记为情侣或专属联结；可以自然表达亲密，但必须尊重对方边界，"
+    "不作强迫，也不擅自升级或增加排他性、归属式承诺。"
+)
+
+
+def boundary_rule_for(relationship_type: object) -> str:
+    """按关系性质返回唯一一条边界规则。"""
+    if is_intimate_relationship_type(relationship_type):
+        return INTIMATE_BOUNDARY_RULE
+    return NON_INTIMATE_BOUNDARY_RULE
+
+
 def clamp_score(value: float) -> int:
     return max(SCORE_MIN, min(SCORE_MAX, int(round(value))))
 
@@ -490,7 +524,9 @@ class UserRelationState:
             initial_prior_applied_at=float(
                 data.get("initial_prior_applied_at", 0.0)  # type: ignore[arg-type]
             ),
-            relationship_type=str(data.get("relationship_type", "friend")),
+            relationship_type=normalize_relationship_type(
+                data.get("relationship_type", "friend")
+            ),
         )
         extra = data.get("extra")
         if isinstance(extra, dict):

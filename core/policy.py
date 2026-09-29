@@ -11,11 +11,13 @@ from .affect import (
 )
 from .mood import MOOD_ANNOYED, MOOD_LAZY, MoodDecision
 from .models import (
-    RELATIONSHIP_TYPES_ALLOWING_INTIMATE,
     BehaviorAdvice,
     RelationshipSnapshot,
     UserRelationState,
+    boundary_rule_for,
     clamp_score,
+    is_intimate_relationship_type,
+    normalize_relationship_type,
 )
 from .short_term_affinity import (
     TREND_COOLING,
@@ -65,8 +67,11 @@ _FAMILIARITY_FRAGMENTS = {
     "acquaintance": "保持自然，不必过分客套，也不要自来熟。",
     "stranger": "保持友好并注意分寸。",
 }
+# 好感只表示表达上的亲近度，不改变关系性质。恋人/专属联结不再叠加
+# “不等同于恋爱”的否定，避免与放行规则自相矛盾。
 _AFFINITY_FRAGMENTS = {
-    "fond": "可适度亲近和关心，但这不等同于恋爱、占有或排他关系。",
+    "fond": "可适度亲近和关心。",
+    "fond_non_intimate": "可适度亲近和关心，但这不等同于恋爱、占有或排他关系。",
     "distant": "保持礼貌，不必刻意热络。",
 }
 _AFFECT_FRAGMENTS = {
@@ -78,16 +83,6 @@ _TREND_FRAGMENTS = {
     TREND_COOLING: "最近的互动让关系暂时降温；回复应更谨慎、克制并保留分寸，但不能冷暴力、讽刺或惩罚对方。",
     TREND_SETTLING: "前面出现过明显的关系波动，正在恢复平稳；回复自然一点，不要把上一轮情绪继续放大。",
 }
-_RELATIONSHIP_BOUNDARY_FRAGMENT = (
-    "关系状态只表示互动中的熟悉、好感和信任，不等于恋爱、主从、占有或排他关系；"
-    "不要把朋友式互动升级成亲密关系，也不要作归属式或排他性承诺。"
-)
-# 仅当管理员显式标记为情侣/恋人（lover）或专属联结（exclusive）时，才允许恋人级亲密表达。
-# 家人/朋友/对手/队友/挚友即使高好感也不升级为恋人关系。
-_RELATIONSHIP_INTIMATE_FRAGMENT = (
-    "关系已被明确标记为情侣或专属联结；可以在对方明确接受的前提下自然表达亲密，"
-    "但仍尊重对方边界，不作强迫或排他性承诺。"
-)
 
 
 def build_snapshot(
@@ -112,6 +107,9 @@ def build_snapshot(
     affinity_tier = _affinity_tier(affinity)
     affect = affect or AffectDecision()
     affinity_trend = affinity_trend or AffinityTrendDecision()
+    relationship_type = normalize_relationship_type(
+        getattr(state, "relationship_type", "friend")
+    )
     warm_style_allowed = (
         affinity >= _WARM_AFFINITY_MIN
         and trust >= _WARM_TRUST_MIN
@@ -162,16 +160,18 @@ def build_snapshot(
             if trend_fragment:
                 fragments.append(trend_fragment)
         fragments.append(_FAMILIARITY_FRAGMENTS[familiarity_tier])
-        affinity_fragment = _AFFINITY_FRAGMENTS.get(affinity_tier)
-        if affinity_fragment:
-            fragments.append(affinity_fragment)
         # 关系类型分级：仅管理员显式标记为 lover/exclusive（情侣/专属联结）才放行亲密表达。
         # 家人/朋友/对手/队友/挚友即使高好感也不升级为恋人关系，仍注入对应边界。
-        relationship_type = str(getattr(state, "relationship_type", "friend") or "friend").strip()
-        if relationship_type in RELATIONSHIP_TYPES_ALLOWING_INTIMATE:
-            fragments.append(_RELATIONSHIP_INTIMATE_FRAGMENT)
-        else:
-            fragments.append(_RELATIONSHIP_BOUNDARY_FRAGMENT)
+        intimate = is_intimate_relationship_type(relationship_type)
+        if affinity_tier == "fond":
+            fragments.append(
+                _AFFINITY_FRAGMENTS["fond"]
+                if intimate
+                else _AFFINITY_FRAGMENTS["fond_non_intimate"]
+            )
+        elif affinity_tier == "distant":
+            fragments.append(_AFFINITY_FRAGMENTS["distant"])
+        fragments.append(boundary_rule_for(relationship_type))
         if min(trust_dimensions.values()) <= _LOW:
             fragments.append("涉及重要事实或行动时应先核验，不根据关系状态作出承诺。")
 
@@ -195,5 +195,5 @@ def build_snapshot(
         prompt_fragment=" ".join(fragments),
         trust_dimensions=trust_dimensions,
         behavior=behavior,
-        relationship_type=str(getattr(state, "relationship_type", "friend") or "friend"),
+        relationship_type=relationship_type,
     )

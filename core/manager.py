@@ -43,6 +43,7 @@ from .models import (
     RelationshipScope,
     RelationshipSnapshot,
     UserRelationState,
+    normalize_relationship_type,
 )
 from .mood import MoodDecision, MoodTracker
 from .policy import PolicyConfig, build_snapshot
@@ -256,7 +257,7 @@ class RelationshipStateManager:
         只影响「情」注入的表达约束（是否放行恋人级亲密表达），
         不授予任何权限，也不改变好感/信任/熟悉度分数。
         """
-        normalized = (relationship_type or "friend").strip() or "friend"
+        normalized = normalize_relationship_type(relationship_type)
         async with self._lock:
             state = self._states.setdefault(scope.user_key, UserRelationState())
             state.relationship_type = normalized

@@ -14,7 +14,7 @@
       <div class="hero-copy">
         <p class="eyebrow">AstrBot 插件管理页</p>
         <h1>情</h1>
-        <p>关系分层、好感分布、信任门槛与边界状态可视化</p>
+        <p>关系分层、好感分布、信任门槛与表达分寸可视化（与工具权限无关）</p>
       </div>
       <div class="toolbar">
         <span id="relation-freshness" class="freshness" role="status" aria-live="polite">尚未刷新</span>
@@ -42,7 +42,7 @@
         <div class="section-heading">
           <div>
             <h2>关系策略</h2>
-            <p>高好感保持稀缺，普通互动默认止于朋友区，并保留必要边界。</p>
+            <p>高好感保持稀缺，普通互动默认止于朋友区，并保留必要表达分寸。</p>
           </div>
           <span class="pill ok">只读规则</span>
         </div>
@@ -60,7 +60,7 @@
         <div class="logic-list">
           <div><span class="series-key">1</span><p>普通互动只缓慢形成熟悉和朋友关系，不自动转化为依赖型高好感。</p></div>
           <div><span class="series-key">2</span><p>进入高好感需要白名单，并同时满足信任与熟悉度门槛。</p></div>
-          <div><span class="series-key">3</span><p>条件不足时继续保持边界，不因聊天频率高而取消谨慎。</p></div>
+          <div><span class="series-key">3</span><p>条件不足时保持谨慎的表达分寸，不因聊天频率高而放宽。</p></div>
         </div>
       </details>
 
@@ -87,9 +87,9 @@
             <option value="yes">白名单</option>
             <option value="no">普通</option>
           </select></label>
-          <label class="control"><span>边界</span><select id="relation-boundary-filter">
+          <label class="control"><span>表达分寸</span><select id="relation-boundary-filter">
             <option value="">全部</option>
-            <option value="开放">开放</option>
+            <option value="开放">可亲近</option>
             <option value="谨慎">谨慎</option>
           </select></label>
           <label class="control"><span>排序</span><select id="relation-sort">
@@ -120,7 +120,7 @@
               <col class="relation-col-time" />
               <col class="relation-col-state" />
             </colgroup>
-            <thead><tr><th scope="col">自然人</th><th scope="col">关系性质</th><th scope="col">层级</th><th scope="col">最近互动</th><th scope="col">边界状态</th></tr></thead>
+            <thead><tr><th scope="col">自然人</th><th scope="col">关系性质</th><th scope="col">层级</th><th scope="col">最近互动</th><th scope="col">表达分寸</th></tr></thead>
             <tbody id="relation-tbody"><tr class="empty-row"><td colspan="5">加载中…</td></tr></tbody>
           </table>
         </div>

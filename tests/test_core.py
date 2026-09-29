@@ -1261,6 +1261,12 @@ class PolicyTest(unittest.TestCase):
         default = UserRelationState.from_dict({})
         self.assertEqual(default.relationship_type, "friend")
 
+    def test_relationship_type_aliases_are_normalized_when_loading_state(self) -> None:
+        for raw, expected in (("爱人", "lover"), ("专属", "exclusive")):
+            with self.subTest(raw=raw):
+                state = UserRelationState.from_dict({"relationship_type": raw})
+                self.assertEqual(state.relationship_type, expected)
+
 
 if __name__ == "__main__":
     unittest.main()
