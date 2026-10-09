@@ -515,6 +515,48 @@ async function load() {
   }
 }
 
+// 条件展示：声明「当某个选择项取特定值时，哪些字段才生效」。
+// 仅影响展示，不改变配置语义；与搜索/仅看已改筛选叠加，互不覆盖。
+const configDependencies = {
+  MOOD_WINDOW_SECONDS: { key: "MOOD_ENABLED", on: true },
+  MOOD_FREQUENT_AFTER: { key: "MOOD_ENABLED", on: true },
+  MOOD_STREAK_AFTER: { key: "MOOD_ENABLED", on: true },
+  MOOD_STREAK_GAP_SECONDS: { key: "MOOD_ENABLED", on: true },
+  MOOD_LAZY_SCORE: { key: "MOOD_ENABLED", on: true },
+  MOOD_ANNOYED_SCORE: { key: "MOOD_ENABLED", on: true },
+  MOOD_SILENCE_SCORE: { key: "MOOD_ENABLED", on: true },
+  MOOD_SILENCE_CHANCE_PERCENT: { key: "MOOD_ENABLED", on: true },
+  MOOD_MAX_CONSECUTIVE_SILENCES: { key: "MOOD_ENABLED", on: true },
+  AFFECT_HALF_LIFE_SECONDS: { key: "AFFECT_ENABLED", on: true },
+  AFFECT_POSITIVE_GAIN: { key: "AFFECT_ENABLED", on: true },
+  AFFECT_NEGATIVE_GAIN: { key: "AFFECT_ENABLED", on: true },
+  AFFECT_STANCE_THRESHOLD: { key: "AFFECT_ENABLED", on: true },
+  SHORT_TERM_AFFINITY_HALF_LIFE_SECONDS: { key: "SHORT_TERM_AFFINITY_ENABLED", on: true },
+  SHORT_TERM_AFFINITY_DAILY_THRESHOLD: { key: "SHORT_TERM_AFFINITY_ENABLED", on: true },
+  SHORT_TERM_AFFINITY_MOMENTUM_THRESHOLD: { key: "SHORT_TERM_AFFINITY_ENABLED", on: true },
+  SHORT_TERM_AFFINITY_HOLD_SECONDS: { key: "SHORT_TERM_AFFINITY_ENABLED", on: true },
+  CROSS_PLATFORM_MEMORY_TOP_K: { key: "CROSS_PLATFORM_MEMORY_ENABLED", on: true },
+  CROSS_PLATFORM_MEMORY_MAX_CHARS: { key: "CROSS_PLATFORM_MEMORY_ENABLED", on: true },
+};
+
+function configToggleOn(value) {
+  return value === true || value === "true" || value === "on" || value === 1 || value === "1";
+}
+
+function applyConfigVisibility() {
+  const form = $("#config-form");
+  if (!form) return;
+  const values = {};
+  form.querySelectorAll("[data-key]").forEach((el) => {
+    values[el.dataset.key] = el.type === "checkbox" ? !!el.checked : el.value;
+  });
+  form.querySelectorAll("[data-config-field]").forEach((field) => {
+    const dep = configDependencies[field.dataset.configField];
+    const visible = !dep || configToggleOn(values[dep.key]);
+    field.classList.toggle("is-conditional-hidden", !visible);
+  });
+}
+
 function renderConfigField(key, field, value) {
   const id = `cfg-${key}`;
   const hintId = `${id}-hint`;
@@ -584,6 +626,7 @@ function renderConfigForm(schema, config) {
       else openConfigGroups.delete(group.dataset.configGroup);
     });
   });
+  applyConfigVisibility();
   updateConfigDirtyState();
   updateConfigFoldButton();
   applyConfigFilter();
@@ -694,7 +737,9 @@ function applyConfigFilter() {
     let visible = 0;
     group.querySelectorAll("[data-config-field]").forEach((field) => {
       const input = field.querySelector("[data-key]");
-      const matches = (!query || (field.dataset.configSearch || "").includes(query)) &&
+      const condHidden = field.classList.contains("is-conditional-hidden");
+      const matches = !condHidden &&
+        (!query || (field.dataset.configSearch || "").includes(query)) &&
         (!configOnlyChanged || fieldIsDirty(input));
       field.hidden = !matches;
       if (matches) visible += 1;
@@ -1568,8 +1613,10 @@ function bindPageEvents() {
   });
   const configForm = $("#config-form");
   const onConfigFieldChange = () => {
+    applyConfigVisibility();
     updateConfigDirtyState();
-    if (configOnlyChanged) applyConfigFilter();
+    // 可见性变化也会改变当前搜索结果，始终重算筛选，避免新显示字段沿用旧 hidden 状态。
+    applyConfigFilter();
   };
   configForm.addEventListener("input", onConfigFieldChange);
   configForm.addEventListener("change", onConfigFieldChange);

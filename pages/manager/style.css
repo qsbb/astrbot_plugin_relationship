@@ -1015,6 +1015,7 @@ body[data-series-ui] .config-group[open] .config-group-title::before { transform
 body[data-series-ui] .config-group[open] > summary { border-bottom: 1px solid var(--si-line-solid); }
 
 .config-field[hidden],
+.config-field.is-conditional-hidden,
 details.config-group[hidden] { display: none; }
 
 .config-field {

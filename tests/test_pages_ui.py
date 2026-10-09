@@ -268,10 +268,10 @@ class PagesUiTest(unittest.TestCase):
         self.assertIn("只有白名单关系可以调整", self.js)
 
     def test_page_assets_have_cache_stamp(self) -> None:
-        self.assertIn("style.css?v=0.13.1-1", self.html)
-        self.assertIn("series-ui.css?v=0.13.1-1", self.html)
-        self.assertIn("series-ui.js?v=0.13.1-1", self.html)
-        self.assertIn("app.js?v=0.13.1-1", self.html)
+        self.assertIn("style.css?v=0.13.3-1", self.html)
+        self.assertIn("series-ui.css?v=0.13.3-1", self.html)
+        self.assertIn("series-ui.js?v=0.13.3-1", self.html)
+        self.assertIn("app.js?v=0.13.3-1", self.html)
 
     def test_legacy_profile_change_reports_restart_requirement(self) -> None:
         self.assertIn("data.restart_required", self.js)
@@ -534,3 +534,34 @@ def test_details_tab_filters_sorts_and_copies_long_ids():
     assert "function setAutoRefresh(enabled)" in js
     assert "const AUTO_REFRESH_MS = 60000;" in js
     assert ".freshness.is-stale" in css
+
+
+class ConditionalVisibilityUITests(unittest.TestCase):
+    """条件展示：依赖开关关闭时收起从属字段（仅展示层，不改配置语义）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.js = (PAGES_DIR / "app.js").read_text(encoding="utf-8")
+        cls.css = (PAGES_DIR / "style.css").read_text(encoding="utf-8")
+
+    def test_dependency_table_present(self):
+        self.assertIn("const configDependencies", self.js)
+        self.assertIn("function applyConfigVisibility(", self.js)
+        self.assertIn("function configToggleOn(", self.js)
+
+    def test_mood_affect_and_affinity_trend_dependencies(self):
+        self.assertIn('MOOD_WINDOW_SECONDS: { key: "MOOD_ENABLED", on: true', self.js)
+        self.assertIn('AFFECT_HALF_LIFE_SECONDS: { key: "AFFECT_ENABLED", on: true', self.js)
+        self.assertIn('SHORT_TERM_AFFINITY_HALF_LIFE_SECONDS: { key: "SHORT_TERM_AFFINITY_ENABLED", on: true', self.js)
+        self.assertIn('CROSS_PLATFORM_MEMORY_TOP_K: { key: "CROSS_PLATFORM_MEMORY_ENABLED", on: true', self.js)
+
+    def test_visibility_composes_with_filter(self):
+        # 收起状态用 class 标记，搜索/仅看已改筛选叠加时不被覆盖
+        self.assertIn("is-conditional-hidden", self.js)
+        self.assertIn("const condHidden = field.classList.contains(\"is-conditional-hidden\")", self.js)
+        self.assertIn(".config-field.is-conditional-hidden", self.css)
+
+    def test_recompute_on_field_change(self):
+        self.assertIn("applyConfigVisibility();\n    updateConfigDirtyState();", self.js)
+        self.assertIn("updateConfigDirtyState();\n    // 可见性变化也会改变当前搜索结果", self.js)
+        self.assertIn("applyConfigFilter();\n  };", self.js)
