@@ -97,6 +97,7 @@ from .core.request_context import (
     add_prompt_fragment,
     add_reason,
     ensure_context,
+    get_artifact,
     get_flag,
     set_artifact,
     set_flag,
@@ -1199,6 +1200,39 @@ class RelationshipPlugin(Star):
             return
 
         request_context = ensure_context(event, PHASE_LLM_REQUEST)
+        mute_recovery = get_artifact(
+            request_context, OWNER_CONVERSATION_FLOW, "mute_recovery"
+        )
+        if (
+            isinstance(mute_recovery, dict)
+            and mute_recovery.get("is_user_message") is False
+        ):
+            valid_recovery = (
+                mute_recovery.get("version") == "1.0"
+                and mute_recovery.get("kind") == "mute_recovery"
+                and isinstance(mute_recovery.get("episode_id"), str)
+                and bool(mute_recovery["episode_id"].strip())
+                and all(
+                    isinstance(mute_recovery.get(key), str)
+                    and bool(mute_recovery[key].strip())
+                    and mute_recovery[key] == plugin._safe_event_id(event, method)
+                    for key, method in (
+                        ("platform_id", "get_platform_id"),
+                        ("bot_id", "get_self_id"),
+                        ("group_id", "get_group_id"),
+                    )
+                )
+            )
+            # 内部事件没有当前用户；即使标记损坏，也不能退回真人互动路径。
+            # 本分支不读取关系快照，避免隐式建档或套用操作者的关系约束。
+            add_reason(
+                request_context,
+                OWNER_RELATIONSHIP,
+                "MUTE_RECOVERY_RELATIONSHIP_SKIPPED"
+                if valid_recovery
+                else "MUTE_RECOVERY_CONTEXT_INVALID",
+            )
+            return
 
         text = plugin._get_text(event)
         recorded = await plugin._record_platform_interaction(event, req, text)
