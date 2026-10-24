@@ -1292,3 +1292,23 @@ class AffinityQuestionGuidanceTests(unittest.TestCase):
         block = self._block()
         self.assertIn("不要报出内部数值、档位名或字段名", block)
         self.assertIn("不要说“没有这个功能”“查不到”", block)
+
+
+class AffinityAnswerBoundaryTests(unittest.TestCase):
+    """谈感受可以，但不能现编共同经历，也不能越级升级关系。"""
+
+    def _block(self):
+        from astrbot_plugin_relationship.core.models import RelationshipSnapshot
+        from astrbot_plugin_relationship.core.prompts import build_injection_block
+
+        return build_injection_block(RelationshipSnapshot(prompt_fragment="语气自然亲近。"))
+
+    def test_forbids_fabricating_shared_history(self):
+        block = self._block()
+        self.assertIn("不要为了显得亲近而现编共同经历", block)
+        self.assertIn("真实出现过", block)
+
+    def test_keeps_relationship_and_group_boundary(self):
+        block = self._block()
+        self.assertIn("仍受当前关系性质与群聊公开边界约束", block)
+        self.assertIn("不要把普通的好感询问自动升级成恋爱表态", block)
