@@ -113,7 +113,7 @@ from .series_control import NATIVE_KEYS, SeriesControlAdapter
 from .series_webui import RelationshipWebUIAdapter
 
 PLUGIN_NAME = "astrbot_plugin_relationship"
-__version__ = "0.14.1"
+__version__ = "0.14.2"
 
 _CONFIG_STORE_NAME = "relationship-config.json"
 _IDENTITY_MERGE_JOURNAL_NAME = "identity-merge-pending.json"

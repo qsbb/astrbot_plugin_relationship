@@ -1270,3 +1270,25 @@ class PolicyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AffinityQuestionGuidanceTests(unittest.TestCase):
+    """被问好感/印象时，约束应引导自然回答，而不是否认问题存在。"""
+
+    def _block(self):
+        from astrbot_plugin_relationship.core.models import RelationshipSnapshot
+        from astrbot_plugin_relationship.core.prompts import build_injection_block
+
+        snapshot = RelationshipSnapshot(prompt_fragment="语气自然亲近。")
+        return build_injection_block(snapshot)
+
+    def test_guidance_allows_answering_affinity_questions(self):
+        block = self._block()
+        self.assertIn("好感、印象、亲密度", block)
+        self.assertIn("可以直接用自己的话回答", block)
+        self.assertIn("主观感受", block)
+
+    def test_guidance_still_forbids_exposing_numbers(self):
+        block = self._block()
+        self.assertIn("不要报出内部数值、档位名或字段名", block)
+        self.assertIn("不要说“没有这个功能”“查不到”", block)
